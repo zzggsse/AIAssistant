@@ -39,7 +39,7 @@
                 android:text="思考过程"
                 android:textSize="11sp"
                 android:textStyle="bold"
-                android:textColor="@color/colorSystemText" />
+                android:textColor="@color/colorTextSecondary" />
 
             <ImageView
                 android:id="@+id/ivThinkArrow"

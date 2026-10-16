@@ -15,11 +15,12 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:paddingStart="8dp"
-            android:paddingEnd="10dp"
-            android:paddingTop="10dp"
-            android:paddingBottom="10dp"
-            android:background="@color/colorSurface">
+            android:paddingStart="6dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:background="@color/colorSurface"
+            android:elevation="3dp">
 
             <ImageView
                 android:id="@+id/btnMenu"
@@ -148,7 +149,7 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="26dp"
+                    android:layout_marginTop="28dp"
                     android:orientation="horizontal">
 
                     <TextView
@@ -156,15 +157,16 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:layout_marginEnd="8dp"
+                        android:layout_marginEnd="6dp"
                         android:background="@drawable/bg_suggestion"
-                        android:paddingStart="14dp"
-                        android:paddingEnd="14dp"
-                        android:paddingTop="14dp"
-                        android:paddingBottom="14dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="13dp"
+                        android:paddingBottom="13dp"
                         android:text="定一个早上八点的闹钟"
                         android:textSize="14sp"
-                        android:textColor="@color/colorTextPrimary" />
+                        android:textColor="@color/colorTextPrimary"
+                        android:fontFamily="sans-serif" />
 
                     <TextView
                         android:id="@+id/suggestionWechat"
@@ -172,19 +174,20 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:background="@drawable/bg_suggestion"
-                        android:paddingStart="14dp"
-                        android:paddingEnd="14dp"
-                        android:paddingTop="14dp"
-                        android:paddingBottom="14dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="13dp"
+                        android:paddingBottom="13dp"
                         android:text="打开微信"
                         android:textSize="14sp"
-                        android:textColor="@color/colorTextPrimary" />
+                        android:textColor="@color/colorTextPrimary"
+                        android:fontFamily="sans-serif" />
                 </LinearLayout>
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="6dp"
                     android:orientation="horizontal">
 
                     <TextView
@@ -192,15 +195,16 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:layout_marginEnd="8dp"
+                        android:layout_marginEnd="6dp"
                         android:background="@drawable/bg_suggestion"
-                        android:paddingStart="14dp"
-                        android:paddingEnd="14dp"
-                        android:paddingTop="14dp"
-                        android:paddingBottom="14dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="13dp"
+                        android:paddingBottom="13dp"
                         android:text="搜一下今天的新闻"
                         android:textSize="14sp"
-                        android:textColor="@color/colorTextPrimary" />
+                        android:textColor="@color/colorTextPrimary"
+                        android:fontFamily="sans-serif" />
 
                     <TextView
                         android:id="@+id/suggestionNote"
@@ -208,13 +212,14 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:background="@drawable/bg_suggestion"
-                        android:paddingStart="14dp"
-                        android:paddingEnd="14dp"
-                        android:paddingTop="14dp"
-                        android:paddingBottom="14dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingTop="13dp"
+                        android:paddingBottom="13dp"
                         android:text="记一下周三交报告"
                         android:textSize="14sp"
-                        android:textColor="@color/colorTextPrimary" />
+                        android:textColor="@color/colorTextPrimary"
+                        android:fontFamily="sans-serif" />
                 </LinearLayout>
             </LinearLayout>
         </FrameLayout>
@@ -228,7 +233,8 @@
             android:paddingEnd="10dp"
             android:paddingTop="8dp"
             android:paddingBottom="10dp"
-            android:background="@color/colorInputBar">
+            android:background="@color/colorInputBar"
+            android:elevation="4dp">
 
             <FrameLayout
                 android:layout_width="0dp"

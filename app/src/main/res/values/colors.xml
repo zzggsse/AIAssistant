@@ -1,26 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorBackground">#F6F7F9</color>
+    <color name="colorBackground">#F4F5F7</color>
     <color name="colorSurface">#FFFFFF</color>
-    <color name="colorPrimary">#4D6BFE</color>
-    <color name="colorPrimaryDark">#3B55DC</color>
-    <color name="colorPrimaryLight">#EDF1FF</color>
+    <color name="colorPrimary">#3D5AFE</color>
+    <color name="colorPrimaryDark">#3040C8</color>
+    <color name="colorPrimaryLight">#E8ECFF</color>
     <color name="colorOnPrimary">#FFFFFF</color>
     <color name="colorAccent">#F59E0B</color>
-    <color name="colorTextPrimary">#18181B</color>
-    <color name="colorTextSecondary">#71717A</color>
-    <color name="colorTextHint">#A1A1AA</color>
-    <color name="colorDivider">#E4E4E7</color>
-    <color name="colorBubbleUser">#4D6BFE</color>
+    <color name="colorTextPrimary">#1A1D23</color>
+    <color name="colorTextSecondary">#6B7080</color>
+    <color name="colorTextHint">#9BA0AC</color>
+    <color name="colorDivider">#E8E9ED</color>
+    <color name="colorBubbleUser">#3D5AFE</color>
     <color name="colorBubbleAssistant">#FFFFFF</color>
     <color name="colorBubbleAssistantBorder">#ECEEF2</color>
-    <color name="colorBubbleSystem">#F0F1F5</color>
-    <color name="colorSystemText">#666D78</color>
-    <color name="colorBubbleThink">#F4F5F7</color>
-    <color name="colorBubbleThinkBorder">#D9DCE1</color>
-    <color name="colorThinkText">#5D6472</color>
+    <color name="colorBubbleSystem">#EDEFF2</color>
+    <color name="colorSystemText">#7A8090</color>
+    <color name="colorBubbleThink">#F7F8FA</color>
+    <color name="colorBubbleThinkBorder">#E2E4E8</color>
+    <color name="colorThinkText">#5C6270</color>
     <color name="colorInputBar">#FFFFFF</color>
-    <color name="colorInputField">#F1F2F5</color>
+    <color name="colorInputField">#F2F3F5</color>
     <color name="colorSuccess">#22C55E</color>
     <color name="colorError">#EF4444</color>
 </resources>

@@ -466,7 +466,6 @@
                     android:layout_height="@dimen/developer_list_height"
                     android:layout_marginTop="6dp"
                     android:background="@drawable/bg_settings_card"
-                    android:nestedScrollingEnabled="true"
                     android:scrollbars="vertical"
                     android:fadeScrollbars="true">
 
