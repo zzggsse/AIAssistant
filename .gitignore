@@ -22,6 +22,8 @@ captures/
 *.tmp
 *.png
 !app/src/main/**/*.png
+/*.xml
+!app/src/main/**/*.xml
 
 # Local AI provider credentials must never be committed.
 .env
