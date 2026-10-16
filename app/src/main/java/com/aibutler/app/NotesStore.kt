@@ -1,0 +1,53 @@
+package com.aibutler.app
+
+import android.content.Context
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+data class Note(val title: String, val content: String, val time: Long)
+
+/**
+ * 本地便签：AI 可以帮你记事 / 查便签。存在应用私有目录的 notes.json。
+ */
+object NotesStore {
+    private val gson = Gson()
+    private val type = object : TypeToken<MutableList<Note>>() {}.type
+
+    private fun file(c: Context) = java.io.File(c.filesDir, "notes.json")
+
+    private fun load(c: Context): MutableList<Note> {
+        val f = file(c)
+        if (!f.exists()) return mutableListOf()
+        return try {
+            gson.fromJson<MutableList<Note>>(f.readText(), type) ?: mutableListOf()
+        } catch (e: Exception) {
+            mutableListOf()
+        }
+    }
+
+    private fun save(c: Context, notes: List<Note>) {
+        AtomicFiles.write(file(c), gson.toJson(notes))
+    }
+
+    fun create(c: Context, title: String, content: String): String {
+        val notes = load(c)
+        notes.add(0, Note(title.ifBlank { "便签" }, content, System.currentTimeMillis()))
+        save(c, notes)
+        return "已记下：「${title.ifBlank { "便签" }}」"
+    }
+
+    fun read(c: Context, keyword: String): String {
+        val notes = load(c)
+        if (notes.isEmpty()) return "（便签是空的）"
+        val list = if (keyword.isBlank()) notes
+        else notes.filter { it.title.contains(keyword) || it.content.contains(keyword) }
+        if (list.isEmpty()) return "没有找到包含「$keyword」的便签"
+        val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
+        return list.take(30).mapIndexed { i, n ->
+            "${i + 1}. 【${n.title}】${n.content} (${fmt.format(Date(n.time))})"
+        }.joinToString("\n")
+    }
+}

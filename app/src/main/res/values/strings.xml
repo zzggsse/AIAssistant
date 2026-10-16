@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AI小助手</string>
+    <string name="accessibility_desc">开启后，AI 助手才能代替你点击、输入、操作其他 App</string>
+    <string name="delete_experience">删除这条行为记录</string>
+    <string name="edit_experience">编辑这条行为记录的详细内容</string>
+</resources>
