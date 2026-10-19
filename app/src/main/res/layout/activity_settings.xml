@@ -461,7 +461,7 @@
                         app:backgroundTint="@null" />
                 </LinearLayout>
 
-                <androidx.core.widget.NestedScrollView
+                <com.aibutler.app.GestureLockScrollView
                     android:layout_width="match_parent"
                     android:layout_height="@dimen/developer_list_height"
                     android:layout_marginTop="6dp"
@@ -474,7 +474,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical" />
-                </androidx.core.widget.NestedScrollView>
+                </com.aibutler.app.GestureLockScrollView>
 
                 <TextView
                     android:layout_width="match_parent"

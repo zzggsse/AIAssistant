@@ -21,6 +21,10 @@
     <color name="colorThinkText">#5C6270</color>
     <color name="colorInputBar">#FFFFFF</color>
     <color name="colorInputField">#F2F3F5</color>
+    <color name="colorSoftField">#F6F7FA</color>
+    <color name="colorInputStroke">#E2E5EC</color>
+    <color name="colorActionStroke">#DAE0FF</color>
+    <color name="colorCardShadow">#121A1D23</color>
     <color name="colorSuccess">#22C55E</color>
     <color name="colorError">#EF4444</color>
 </resources>

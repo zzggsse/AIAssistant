@@ -284,7 +284,7 @@
     </LinearLayout>
 
     <LinearLayout
-        android:layout_width="298dp"
+        android:layout_width="312dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
         android:orientation="vertical"
@@ -297,31 +297,22 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:paddingStart="18dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="20dp"
-            android:paddingBottom="20dp">
-
-            <ImageView
-                android:layout_width="44dp"
-                android:layout_height="44dp"
-                android:src="@drawable/ic_assistant"
-                android:background="@drawable/bg_assistant_avatar"
-                android:padding="8dp"
-                android:importantForAccessibility="no" />
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
+            android:paddingTop="26dp"
+            android:paddingBottom="22dp">
 
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="12dp"
                 android:orientation="vertical">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/app_name"
-                    android:textSize="17sp"
+                    android:textSize="22sp"
                     android:fontFamily="sans-serif-medium"
                     android:textColor="@color/colorTextPrimary" />
 
@@ -329,7 +320,7 @@
                     android:id="@+id/tvDrawerProvider"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="6dp"
                     android:maxLines="1"
                     android:ellipsize="end"
                     android:text="未配置"
@@ -341,145 +332,101 @@
         <LinearLayout
             android:id="@+id/btnNewChat"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="12dp"
+            android:layout_height="62dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:background="@drawable/bg_section_button"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
             android:foreground="?attr/selectableItemBackground">
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_new_chat"
-                android:importantForAccessibility="no" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
                 android:text="开启新对话"
                 android:textSize="15sp"
-                android:textColor="@color/colorPrimary" />
+                android:textColor="@color/colorTextPrimary" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/btnStartLearning"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginTop="8dp"
-            android:layout_marginEnd="12dp"
+            android:layout_height="62dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:background="@drawable/bg_section_button"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
             android:foreground="?attr/selectableItemBackground">
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_new_chat"
-                android:tint="@color/colorAccent"
-                android:importantForAccessibility="no" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
                 android:text="开始学习任务"
                 android:textSize="15sp"
-                android:textColor="@color/colorPrimary" />
+                android:textColor="@color/colorTextPrimary" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/btnVisualSamples"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginTop="8dp"
-            android:layout_marginEnd="12dp"
+            android:layout_height="62dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:background="@drawable/bg_section_button"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
             android:foreground="?attr/selectableItemBackground">
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_eye_closed"
-                android:tint="@color/colorAccent"
-                android:importantForAccessibility="no" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
                 android:text="本地图形样本"
                 android:textSize="15sp"
-                android:textColor="@color/colorPrimary" />
+                android:textColor="@color/colorTextPrimary" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/btnLearningTasks"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginTop="8dp"
-            android:layout_marginEnd="12dp"
+            android:layout_height="62dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:background="@drawable/bg_section_button"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
             android:foreground="?attr/selectableItemBackground">
-
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_assistant"
-                android:importantForAccessibility="no" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
                 android:text="学习任务列表"
                 android:textSize="15sp"
-                android:textColor="@color/colorPrimary" />
+                android:textColor="@color/colorTextPrimary" />
         </LinearLayout>
 
         <TextView
             android:id="@+id/tvHistoryLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="20dp"
+            android:layout_marginStart="22dp"
             android:layout_marginTop="18dp"
             android:text="历史对话"
-            android:textSize="13sp"
+            android:textSize="14sp"
+            android:fontFamily="sans-serif-medium"
             android:textColor="@color/colorTextSecondary" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/rvConversations"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="6dp"
             android:layout_weight="1"
             android:clipToPadding="false"
             android:overScrollMode="never"
-            android:paddingBottom="8dp" />
+            android:paddingBottom="4dp" />
 
         <TextView
             android:id="@+id/tvHistoryEmpty"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="20dp"
+            android:layout_marginStart="22dp"
             android:layout_marginTop="16dp"
             android:text="暂无历史对话"
             android:textSize="13sp"
@@ -489,75 +436,88 @@
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
+            android:layout_marginStart="22dp"
+            android:layout_marginEnd="22dp"
             android:layout_marginTop="8dp"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="4dp"
             android:background="@color/colorDivider" />
 
         <com.aibutler.app.HoldToConfirmLayout
             android:id="@+id/tvDeleteHistory"
             android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="12dp"
+            android:layout_height="64dp"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
             android:foreground="?attr/selectableItemBackground">
 
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_delete"
-                android:tint="@color/colorTextSecondary"
-                android:importantForAccessibility="no" />
-
-            <TextView
+            <LinearLayout
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
-                android:text="清空全部历史"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <ImageView
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                    android:src="@drawable/ic_delete"
+                    android:tint="@color/colorTextSecondary"
+                    android:importantForAccessibility="no" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                    android:text="清空全部历史"
                 android:textSize="15sp"
-                android:textColor="@color/colorTextPrimary" />
+                    android:textColor="@color/colorTextPrimary"
+                android:fontFamily="sans-serif" />
+            </LinearLayout>
         </com.aibutler.app.HoldToConfirmLayout>
 
         <LinearLayout
             android:id="@+id/btnDrawerSettings"
             android:layout_width="match_parent"
-            android:layout_height="50dp"
-            android:layout_marginBottom="8dp"
-            android:layout_marginStart="12dp"
-            android:layout_marginEnd="12dp"
+            android:layout_height="64dp"
+            android:layout_marginTop="2dp"
+            android:layout_marginBottom="4dp"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
             android:foreground="?attr/selectableItemBackground">
 
             <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
                 android:src="@drawable/ic_settings"
-                android:tint="@color/colorTextSecondary"
+                android:tint="@color/colorTextPrimary"
                 android:importantForAccessibility="no" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
+                android:layout_marginStart="16dp"
                 android:text="设置与模型"
                 android:textSize="15sp"
-                android:textColor="@color/colorTextPrimary" />
+                android:textColor="@color/colorTextPrimary"
+                android:fontFamily="sans-serif" />
         </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:paddingStart="20dp"
-            android:paddingEnd="20dp"
-            android:paddingBottom="20dp"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
+            android:paddingBottom="16dp"
             android:text="支付、转账和确认下单仍需手动确认。"
             android:textSize="12sp"
-            android:textColor="@color/colorTextHint" />
+            android:textColor="@color/colorTextHint"
+            android:lineSpacingExtra="3dp" />
     </LinearLayout>
 </androidx.drawerlayout.widget.DrawerLayout>

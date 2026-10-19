@@ -6,10 +6,6 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 class ConversationHistoryAdapter(
     private val onConversationClick: (ConversationStore.Conversation) -> Unit,
@@ -42,37 +38,14 @@ class ConversationHistoryAdapter(
         holder.root.setBackgroundResource(
             if (active) R.drawable.bg_history_selected else R.drawable.bg_history_item
         )
-        holder.title.setTextColor(
-            holder.root.context.getColor(if (active) R.color.colorPrimary else R.color.colorTextPrimary)
-        )
         holder.title.text = conversation.title.ifBlank { "新对话" }
-        holder.time.text = formatTime(conversation.updatedAt)
         holder.root.setOnClickListener { onConversationClick(conversation) }
         holder.delete.setOnClickListener { onDeleteClick(conversation) }
-    }
-
-    private fun formatTime(time: Long): String {
-        val calendar = Calendar.getInstance().apply { timeInMillis = time }
-        val now = Calendar.getInstance()
-        val sameYear = calendar.get(Calendar.YEAR) == now.get(Calendar.YEAR)
-        val dayOfYear = calendar.get(Calendar.DAY_OF_YEAR)
-        val today = now.get(Calendar.DAY_OF_YEAR)
-
-        return when {
-            sameYear && dayOfYear == today ->
-                SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(time))
-            sameYear && dayOfYear == today - 1 -> "昨天"
-            sameYear ->
-                SimpleDateFormat("M月d日", Locale.CHINESE).format(Date(time))
-            else ->
-                SimpleDateFormat("yyyy/M/d", Locale.getDefault()).format(Date(time))
-        }
     }
 
     class Holder(root: View) : RecyclerView.ViewHolder(root) {
         val root: View = root
         val title: TextView = root.findViewById(R.id.tvConversationTitle)
-        val time: TextView = root.findViewById(R.id.tvConversationTime)
         val delete: ImageView = root.findViewById(R.id.btnDeleteConversation)
     }
 }

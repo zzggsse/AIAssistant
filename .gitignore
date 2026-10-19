@@ -9,8 +9,6 @@ local.properties
 
 _tmp/
 测试结果/
-一键测试.bat
-app/src/test/
 captures/
 
 *.apk

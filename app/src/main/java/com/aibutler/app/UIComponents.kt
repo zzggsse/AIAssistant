@@ -594,12 +594,14 @@ class HoldToConfirmLayout @JvmOverloads constructor(
     }
 
     override fun onDraw(canvas: Canvas) {
-        val radius = height / 2f
+        val radius = dp(18f)
         val rect = RectF(0f, 0f, width.toFloat(), height.toFloat())
-        canvas.drawRoundRect(rect, radius, radius, fillPaint.apply { alpha = (30 + 45 * progress).toInt() })
+        if (progress > 0f) {
+            canvas.drawRoundRect(rect, radius, radius, fillPaint.apply { alpha = (45 + 45 * progress).toInt() })
+        }
 
-        val iconCenterX = dp(22f)
-        val iconRadius = dp(18f)
+        val iconCenterX = dp(26f)
+        val iconRadius = dp(17f)
         val circle = RectF(
             iconCenterX - iconRadius, height / 2f - iconRadius,
             iconCenterX + iconRadius, height / 2f + iconRadius
