@@ -414,4 +414,47 @@ class AgentLogicTest {
         assertEquals("去观看", TaskCardMemory.matchLabel(setOf("去观看"), "去观看得金币"))
         assertNull(TaskCardMemory.matchLabel(setOf("完全无关"), "去观看得金币"))
     }
+
+    // ========== protocolRetryNote：协议违规纠正提示（真机协议复读问题回归） ==========
+
+    @Test
+    fun 协议纠正_复读占位符触发强纠正() {
+        val note = AgentEngine.protocolRetryNote("[旧页面内容已丢弃；只根据最新页面决策]")
+        assertTrue("复读型违规应点名复读", note.contains("复读"))
+        assertTrue("强纠正必须给出动作格式", note.contains("<answer>"))
+    }
+
+    @Test
+    fun 协议纠正_新占位符同样触发强纠正() {
+        val note = AgentEngine.protocolRetryNote("（历史已省略）")
+        assertTrue("中性占位符被复读时也应触发强纠正", note.contains("复读"))
+    }
+
+    @Test
+    fun 协议纠正_普通违规给常规提醒() {
+        val note = AgentEngine.protocolRetryNote("这个页面我不确定该怎么操作，需要更多说明。")
+        assertTrue(note.contains("<answer>"))
+        assertFalse("普通违规不应误报复读", note.contains("复读"))
+    }
+
+    // ========== 等待卡死熔断（真机抖音视频层 46+轮空转的回归） ==========
+
+    @Test
+    fun 等待卡死_阈值配置合理() {
+        assertTrue("纠正阈值应小于中止阈值", AgentEngine.WAIT_STALL_CORRECT_AT < AgentEngine.WAIT_STALL_ABORT_AT)
+        assertTrue("中止阈值应远小于80轮上限", AgentEngine.WAIT_STALL_ABORT_AT <= 16)
+    }
+
+    @Test
+    fun 等待卡死_纠正文案给出替代动作() {
+        val note = AgentEngine.waitStallCorrectNote(4)
+        assertTrue(note.contains("禁止再输出 Wait"))
+        assertTrue("应提示 Back 或点击按钮", note.contains("Back") && note.contains("关闭"))
+    }
+
+    @Test
+    fun 等待卡死_中止文案说明原因和建议() {
+        assertTrue(AgentEngine.WAIT_STALL_ABORT_MESSAGE.contains("防卡死"))
+        assertTrue(AgentEngine.WAIT_STALL_ABORT_MESSAGE.contains("手动"))
+    }
 }

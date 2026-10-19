@@ -1321,6 +1321,8 @@ class MainActivity : AppCompatActivity() {
             val taskGoal = TaskGoalVerifier.parse(userText)
             val pickerTracker = TaskGoalVerifier.PickerTracker()
             var prevTapCoords: Pair<Int, Int>? = null
+            var waitStallCount = 0
+            var lastWaitDumpSig = ""
             var rewardWaitRounds = 0
             var blockedRewardFinishRounds = 0
             var retryNote = ""
@@ -1388,7 +1390,8 @@ class MainActivity : AppCompatActivity() {
                     val role = item.get("role")?.asString
                     if (role == "user" && i != 1) {
                         // ctx[1] 是用户任务本体，永不替换（丢了任务模型会复读占位符空转）
-                        item.addProperty("content", "[旧页面内容已丢弃；只根据最新页面决策]")
+                        // 中性占位：指令式长文案会被模型当台词复读（真机实测协议违规的诱因）
+                        item.addProperty("content", "（历史已省略）")
                     } else if (role == "assistant" && i < ctx.size() - 1) {
                         item.addProperty("content", item.get("content")?.asString?.take(220) ?: "")
                     }
@@ -1795,7 +1798,7 @@ class MainActivity : AppCompatActivity() {
                         finalReply = "连续多次未按动作协议输出，任务中止。"
                         break
                     }
-                    retryNote = "\n⚠️ 上一轮输出无效：必须输出 <think>...</think> 和 <answer>do(...)</answer>，不要解释页面或输出其他文字。当前截图和屏幕信息就是最新页面。"
+                    retryNote = AgentEngine.protocolRetryNote(raw)
                     continue
                 }
                 parseFails = 0
@@ -2049,6 +2052,34 @@ class MainActivity : AppCompatActivity() {
                         )
                     })
                     continue
+                }
+                // 防卡死：连续 Wait 且读屏完全无变化 → 先强纠正，仍无变化 → 中止
+                // （真机实测：抖音极速版视频层读屏不变，模型连续 Wait 46+轮空烧到80轮上限）
+                if (answer.contains("action=\"Wait\"")) {
+                    if (dumpSigNow == lastWaitDumpSig) {
+                        waitStallCount++
+                    } else {
+                        waitStallCount = 0
+                        lastWaitDumpSig = dumpSigNow
+                    }
+                    if (waitStallCount == AgentEngine.WAIT_STALL_CORRECT_AT) {
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty("content", AgentEngine.waitStallCorrectNote(waitStallCount))
+                        })
+                        android.util.Log.i("AIButler", "AGLM wait stall correct x$waitStallCount")
+                    } else if (waitStallCount >= AgentEngine.WAIT_STALL_ABORT_AT) {
+                        finalReply = AgentEngine.WAIT_STALL_ABORT_MESSAGE
+                        android.util.Log.i("AIButler", "AGLM wait stall abort x$waitStallCount")
+                        runOnUiThread {
+                            adapter.add(ChatAdapter.Msg("system", "🛑 $finalReply"))
+                            rv.scrollToPosition(adapter.items.size - 1)
+                        }
+                        break
+                    }
+                } else {
+                    waitStallCount = 0
+                    lastWaitDumpSig = dumpSigNow
                 }
                 // 录制：动作执行前取当前页面指纹
                 val preActionFp = AssistantAccessibilityService.instance?.currentPageFingerprint()

@@ -489,6 +489,42 @@ object AgentEngine {
         }
     }
 
+    /**
+     * 协议违规后的纠正提示。
+     * 实测（真机 2026-10）：模型有时会复读上下文里的占位/提示文字（如"旧页面内容已丢弃"）
+     * 而不是输出动作，常规提醒挡不住，需要更直白的针对性纠正。
+     */
+    fun protocolRetryNote(raw: String): String {
+        val t = raw.replace(Regex("\\s+"), "")
+        val echoedPlaceholder = t.contains("旧页面内容已丢弃") ||
+            t.contains("历史已省略") ||
+            t.contains("只根据最新页面决策")
+        return if (echoedPlaceholder || t.length <= 6) {
+            "\n⚠️ 上一轮你复读了系统提示文字，属于无效输出。禁止输出任何方括号/括号提示语、禁止解释页面。" +
+                "只输出一个动作：先<think>一句话</think>，再<answer>do(action=\"Tap\", element=[x,y])</answer>" +
+                "或<answer>finish(message=\"结果\")</answer>。"
+        } else {
+            "\n⚠️ 上一轮输出无效：必须输出 <think>...</think> 和 <answer>do(...)</answer>，不要解释页面或输出其他文字。当前截图和屏幕信息就是最新页面。"
+        }
+    }
+
+    /** 防卡死：连续 Wait 且读屏无变化的纠正轮次（达到后注入强纠正提示） */
+    const val WAIT_STALL_CORRECT_AT = 4
+
+    /** 防卡死：连续 Wait 且读屏无变化的中止轮次（到达后自动结束任务，防止烧到80轮上限） */
+    const val WAIT_STALL_ABORT_AT = 8
+
+    /** 连续 Wait 卡死的纠正提示 */
+    fun waitStallCorrectNote(count: Int): String =
+        "⚠️ 系统提示：页面内容已连续 $count 轮完全相同，而你在持续 Wait。视频/进度大概率已结束，" +
+            "或当前页是读屏不可见的自绘层（截图和读屏可能不一致）。请改用 Back 返回上一页，" +
+            "或按截图位置点击关闭/领取/跳过按钮。禁止再输出 Wait。"
+
+    /** 连续 Wait 卡死的中止文案 */
+    val WAIT_STALL_ABORT_MESSAGE: String
+        get() = "页面连续多轮无变化且持续等待，防卡死保护已自动停止任务。" +
+            "此页面可能读屏不可用（视频/自绘层），建议手动完成该步后重新下发任务。"
+
     /** 解析并执行 AutoGLM 动作（坐标0-999 → 真实像素）；a 允许为 null（单元测试纯逻辑模式用） */
     fun execAutoGLM(
         a: Activity?,

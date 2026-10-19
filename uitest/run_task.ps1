@@ -1,8 +1,8 @@
-# 真机自动化回归：向 AI小助手 注入中文任务并监控视觉脑(AutoGLM)执行
-# 用法: .\uitest\run_task.ps1 -Task '打开快手极速版，去签到领金币' [-Polls 8] [-IntervalSec 20]
-# 前提: 手机已连接 adb；无障碍服务已开启（可用 一键增量部署.bat 恢复）
-# 原理: 切到 ADBKeyboard 输入法(支持中文注入) -> am broadcast 写入输入框 -> 点发送
-#       -> 轮询前台Activity + AIButler 日志 + 截图，结束后检查 crash buffer
+# On-device regression: inject a Chinese task into AI Assistant and monitor the AutoGLM vision loop.
+# Usage: .\uitest\run_task.ps1 -Task '...' [-Polls 8] [-IntervalSec 20]
+# Requires: device connected via adb; accessibility service enabled (use OneClickDeploy.bat to restore).
+# NOTE: keep this file ASCII-only. PowerShell 5.1 misparses BOM-less UTF-8 literals under GBK codepage.
+#       Chinese flows in as a runtime parameter, which is safe.
 param(
   [Parameter(Mandatory=$true)][string]$Task,
   [int]$Polls = 8,
@@ -16,15 +16,21 @@ $out = "D:\test\AIAssistant\_tmp\uitest\$stamp"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 function Adb { & $ADB @args }
 
-if ((Adb get-state 2>$null) -ne 'device') { "[FAIL] 检测不到手机"; exit 1 }
+if ((Adb get-state 2>$null) -ne 'device') { Write-Output '[FAIL] no device'; exit 1 }
 
-# 1. 切 ADBKeyboard（中文注入必需；QQ拼音会吃掉 input text 的字符！）
-$qqIme  = 'com.tencent.qqpinyin/.QQPYInputMethodService'
+# 1. Switch to ADBKeyboard IME (required for Chinese injection; QQ Pinyin corrupts input text)
 $adbIme = 'com.android.adbkeyboard/.AdbIME'
 $origIme = ((Adb shell settings get secure default_input_method) -join '').Trim()
-Adb shell ime enable $adbIme 2>$null | Out-Null
-Adb shell ime set $adbIme 2>$null | Out-Null
-Start-Sleep -Seconds 1
+$imeOk = $false
+foreach ($try in 1..3) {
+  Adb shell ime enable $adbIme 2>$null | Out-Null
+  Adb shell ime set $adbIme 2>$null | Out-Null
+  Start-Sleep -Seconds 2
+  $cur = ((Adb shell settings get secure default_input_method) -join '').Trim()
+  if ($cur -eq $adbIme) { $imeOk = $true; break }
+  Write-Output "[warn] ime set did not stick (try $try): $cur"
+}
+if (-not $imeOk) { Write-Output '[FAIL] cannot activate ADBKeyboard'; exit 1 }
 
 function Get-Dump([string]$name) {
   $null = Adb shell timeout 6 uiautomator dump /sdcard/$name.xml 2>$null
@@ -35,67 +41,87 @@ function Tap-Rid([string]$xml, [string]$rid) {
   $m = [regex]::Match($xml, 'resource-id="' + $PKG + ':id/' + $rid + '"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
   if (-not $m.Success) { $m = [regex]::Match($xml, 'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*resource-id="' + $PKG + ':id/' + $rid + '"') }
   if ($m.Success) {
-    $x=[int](([int]$m.Groups[1].Value+[int]$m.Groups[3].Value)/2); $y=[int](([int]$m.Groups[2].Value+[int]$m.Groups[4].Value)/2)
+    $x = [int](([int]$m.Groups[1].Value + [int]$m.Groups[3].Value) / 2)
+    $y = [int](([int]$m.Groups[2].Value + [int]$m.Groups[4].Value) / 2)
     Adb shell input tap $x $y; Start-Sleep -Milliseconds 1000; return $true
   }
   return $false
 }
 
 try {
-  # 2. 确保在主界面
   $crashBefore = ((Adb shell logcat -d -b crash 2>$null) -join "`n").Length
+
+  # 2. Ensure main screen
   Adb shell am start -n "$PKG/.MainActivity" | Out-Null
   Start-Sleep -Seconds 3
   $d = Get-Dump 'main'
-  if ($d -notmatch 'etInput') { "[FAIL] 主界面没有 etInput"; exit 1 }
+  if ($d -notmatch 'etInput') { Write-Output '[FAIL] etInput not found on main screen'; exit 1 }
 
-  # 3. 注入任务并发送
+  # 3. Inject task and send
   $in = [regex]::Match($d, 'resource-id="' + $PKG + ':id/etInput"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
   if (-not $in.Success) { $in = [regex]::Match($d, 'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*resource-id="' + $PKG + ':id/etInput"') }
-  $ix=[int](([int]$in.Groups[1].Value+[int]$in.Groups[3].Value)/2); $iy=[int](([int]$in.Groups[2].Value+[int]$in.Groups[4].Value)/2)
+  $ix = [int](([int]$in.Groups[1].Value + [int]$in.Groups[3].Value) / 2)
+  $iy = [int](([int]$in.Groups[2].Value + [int]$in.Groups[4].Value) / 2)
   Adb shell input tap $ix $iy; Start-Sleep -Milliseconds 800
-  Adb shell am broadcast -a ADB_INPUT_TEXT --es msg $Task 2>$null | Out-Null
-  Start-Sleep -Milliseconds 800
+  # clear any leftover text, then inject with verification (ime/broadcast can silently fail)
+  Adb shell input keycombination 113 29 2>$null
+  Adb shell input keyevent 67 2>$null
+  Start-Sleep -Milliseconds 400
+  $injected = $false
+  foreach ($try in 1..3) {
+    Adb shell am broadcast -a ADB_INPUT_TEXT --es msg $Task 2>$null | Out-Null
+    Start-Sleep -Milliseconds 1000
+    $d2 = Get-Dump "inj$try"
+    $m2 = [regex]::Match($d2, ' text="([^"]*)"[^>]*resource-id="' + $PKG + ':id/etInput"')
+    if ($m2.Success -and $m2.Groups[1].Value.Trim() -eq $Task.Trim()) { $injected = $true; break }
+    Write-Output "[warn] injection mismatch (try $try): [$($m2.Groups[1].Value)]"
+    Adb shell input tap $ix $iy; Start-Sleep -Milliseconds 600
+    Adb shell input keycombination 113 29 2>$null
+    Adb shell input keyevent 67 2>$null
+    Start-Sleep -Milliseconds 400
+  }
+  if (-not $injected) { Write-Output '[FAIL] task text injection failed'; exit 1 }
   Adb shell logcat -c 2>$null
   $d = Get-Dump 'sent'
   $sd = [regex]::Match($d, 'resource-id="' + $PKG + ':id/btnSend"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
   if (-not $sd.Success) { $sd = [regex]::Match($d, 'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*resource-id="' + $PKG + ':id/btnSend"') }
-  $sdx=[int](([int]$sd.Groups[1].Value+[int]$sd.Groups[3].Value)/2); $sdy=[int](([int]$sd.Groups[2].Value+[int]$sd.Groups[4].Value)/2)
+  $sdx = [int](([int]$sd.Groups[1].Value + [int]$sd.Groups[3].Value) / 2)
+  $sdy = [int](([int]$sd.Groups[2].Value + [int]$sd.Groups[4].Value) / 2)
   Adb shell input tap $sdx $sdy
-  "[OK] 任务已发送: $Task"
+  Write-Output "[OK] task sent: $Task"
 
-  # 4. 监控
+  # 4. Monitor
   $done = $false
   for ($i = 1; $i -le $Polls; $i++) {
     Start-Sleep -Seconds $IntervalSec
-    $fg = (((Adb shell dumpsys window 2>$null) | Select-String 'mCurrentFocus').Line -replace '.*u0 ','').Trim()
+    $fg = (((Adb shell dumpsys window 2>$null) | Select-String 'mCurrentFocus').Line -replace '.*u0 ', '').Trim()
     $logs = (Adb shell logcat -d -s AIButler 2>$null) -join "`n" -split "`n" |
-      Where-Object { $_ -match 'AGLM round|验证关|收尾|AGENT 结束|finish\(' } | Select-Object -Last 3
-    "[poll $i] fg=$fg"
+      Where-Object { $_ -match 'AGLM round|finish|AGENT' } | Select-Object -Last 3
+    Write-Output "[poll $i] fg=$fg"
     $logs | ForEach-Object {
-      $s = ($_ -replace '^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s*','').Trim()
-      if ($s.Length -gt 200) { $s = $s.Substring(0,200) + '…' }
-      "   L: $s"
+      $s = ($_ -replace '^\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\s*', '').Trim()
+      if ($s.Length -gt 200) { $s = $s.Substring(0, 200) + '...' }
+      Write-Output "   L: $s"
     }
     Adb shell screencap -p /sdcard/m.png; $null = Adb pull /sdcard/m.png "$out\mon_$i.png" 2>$null
-    if (($logs -join ' ') -match 'AGENT 结束|收尾') { $done = $true; break }
+    # task end = model issued finish() AND our app was pulled back to foreground
+    if (($logs -join ' ') -match 'finish\(' -and $fg -match 'aibutler\.app') { $done = $true; break }
   }
 
-  # 5. 终态检查
+  # 5. Final state
   Start-Sleep -Seconds 2
   Adb shell screencap -p /sdcard/f.png; $null = Adb pull /sdcard/f.png "$out\final.png" 2>$null
   $crash = (Adb shell logcat -d -b crash 2>$null) -join "`n"
   $crash | Out-File -Encoding utf8 "$out\crash.txt"
-  $grew = (($crash.Length) - $crashBefore)
+  $grew = $crash.Length - $crashBefore
   $pid2 = ((Adb shell pidof $PKG) -join '').Trim()
-  ""
-  "================ 结果 ================"
-  "任务结束标志: $done"
-  "进程存活: $([bool]$pid2)  (pid=$pid2)"
-  "crash 新增字节: $grew"
-  "产物目录: $out"
+  Write-Output ''
+  Write-Output '================ RESULT ================'
+  Write-Output "task finished marker: $done"
+  Write-Output "process alive: $([bool]$pid2) (pid=$pid2)"
+  Write-Output "crash buffer grew: $grew bytes"
+  Write-Output "artifacts: $out"
   if (-not $done -or $grew -gt 0) { exit 2 }
 } finally {
-  # 6. 还原输入法
   if ($origIme -and $origIme -ne 'null') { Adb shell ime set $origIme 2>$null | Out-Null }
 }
