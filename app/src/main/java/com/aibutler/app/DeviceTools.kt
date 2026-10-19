@@ -103,6 +103,22 @@ object DeviceTools {
         return "共${lines.size}个应用:\n" + lines.joinToString("\n")
     }
 
+    /**
+     * 冷启动打开App：CLEAR_TASK 清掉残留任务栈。
+     * 背景（真机实测）：上一轮任务可能把目标App留在任意深层页面（如拍摄页），
+     * 普通启动只会把旧任务带到前台，下一轮开局就面对错乱状态。
+     */
+    fun openAppFresh(a: Activity, packageName: String, waitMs: Long = 2500L): String {
+        if (packageName.isBlank()) return "package 不能为空"
+        val pm = a.packageManager
+        val launch = pm.getLaunchIntentForPackage(packageName)
+            ?: return "手机上没有包名为 $packageName 的应用"
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        a.startActivity(launch)
+        if (waitMs > 0) Thread.sleep(waitMs)
+        return "已冷启动 $packageName（已清除残留页面）"
+    }
+
     fun openApp(a: Activity, name: String, waitMs: Long = 1500L): String {
         if (name.isBlank()) return "app_name 不能为空"
         val pm = a.packageManager

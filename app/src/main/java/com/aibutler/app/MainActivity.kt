@@ -1311,6 +1311,16 @@ class MainActivity : AppCompatActivity() {
             var lastCardRound = -99         // 点击发生在第几轮（6轮内出现证据才记账）
             var targetAppPackage: String? = null
             targetAppPackage = guessedApp?.second
+            // 冷启动目标App：上一轮任务可能把它留在任意深层页面（实测：死在拍摄页污染下一轮开局）
+            // 「继续/接着」类恢复指令除外
+            if (targetAppPackage != null && AgentEngine.shouldColdStart(userText)) {
+                try {
+                    val coldMsg = DeviceTools.openAppFresh(this, targetAppPackage!!)
+                    android.util.Log.i("AIButler", "AGLM cold-start: $coldMsg")
+                } catch (e: Exception) {
+                    android.util.Log.w("AIButler", "AGLM cold-start failed", e)
+                }
+            }
             // Bug#2：guessedApp=null 时模型没有目标，此时进入无引导模式，任何非系统/非本App的包名都视为失控
             val unguidedMode = guessedApp == null
             var shortcutOnlyRounds = 0      // 连续由捷径直行（模型未参与）的轮数

@@ -21,12 +21,19 @@
 - **QQ拼音会吃字符**：`adb shell input text` 的英文字母会被拼音 composing 转成中文
   （曾把模型名 `glm-4.5-flash` 变成 `glm-4.5-flas过了没`）。凡是要往输入框打字，
   先切 ADBKeyboard。设置页填模型名同理。
+- **`ime set` 偶发不生效**：切完必须回读 `settings get default_input_method` 验证并重试，
+  否则中文注入会静默打到原输入法上被吞掉（run_task.ps1 已内置验证+重试+注入回读）。
 - **adb daemon 冷启动竞态**：daemon 刚拉起时前几条 `settings put` 可能静默失败，
   写完必须回读验证（参考 一键增量部署.bat 的做法 + 重试）。
 - **SettingsActivity 未导出**：不能 `am start` 直达，要走主界面抽屉
   （`btnMenu` → `btnDrawerSettings`）。
 - **finish 验证关**：视觉脑声称完成任务时 App 会要求出示完成证据再收尾，
   属正常流程（日志关键词「验证关」「收尾」）。
+- **悬浮停止球抓不到**：停止气泡是无障碍 overlay，uiautomator dump 看不见；
+  自动化叫停的兜底手段是 `am force-stop` 进程后重启。
+- **抖音极速版读屏不透明**：视频/赚钱流页面几乎不暴露 a11y 文本节点，
+  外部 dump/录像抓不到操作路径；教路径优先用 App 内「学习模式」
+  （无障碍事件能看到点击），或让用户文字描述后种入经验库。
 
 ## 回归基线（已验证通过）
 

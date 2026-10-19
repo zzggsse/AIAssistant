@@ -514,6 +514,11 @@ object AgentEngine {
     /** 防卡死：连续 Wait 且读屏无变化的中止轮次（到达后自动结束任务，防止烧到80轮上限） */
     const val WAIT_STALL_ABORT_AT = 8
 
+    /** 是否应该冷启动目标App：恢复类指令（继续/接着）除外 */
+    fun shouldColdStart(userText: String): Boolean {
+        return !Regex("继续|接着|上次的|resume", RegexOption.IGNORE_CASE).containsMatchIn(userText)
+    }
+
     /** 连续 Wait 卡死的纠正提示 */
     fun waitStallCorrectNote(count: Int): String =
         "⚠️ 系统提示：页面内容已连续 $count 轮完全相同，而你在持续 Wait。视频/进度大概率已结束，" +

@@ -457,4 +457,19 @@ class AgentLogicTest {
         assertTrue(AgentEngine.WAIT_STALL_ABORT_MESSAGE.contains("防卡死"))
         assertTrue(AgentEngine.WAIT_STALL_ABORT_MESSAGE.contains("手动"))
     }
+
+    // ========== 目标App冷启动判断（真机：上轮死在拍摄页污染下轮开局） ==========
+
+    @Test
+    fun 冷启动_普通任务要冷启动() {
+        assertTrue(AgentEngine.shouldColdStart("打开抖音极速版，去赚钱页签到领金币"))
+        assertTrue(AgentEngine.shouldColdStart("帮我在淘宝搜奶茶"))
+    }
+
+    @Test
+    fun 冷启动_恢复类指令不冷启动() {
+        assertFalse(AgentEngine.shouldColdStart("继续刚才的任务"))
+        assertFalse(AgentEngine.shouldColdStart("接着做"))
+        assertFalse(AgentEngine.shouldColdStart("resume the task"))
+    }
 }
