@@ -175,9 +175,9 @@ try {
     # Focus can LIE on ColorOS: a system dialog may report our app as focused,
     # so probe the dump every poll instead of trusting mCurrentFocus.
     $null = Dismiss-SystemDialog $prefer
-    # Early exit: the app logged its task-final wrap-up (收尾) - stop polling a dead run
+    # Early exit: task wrap-up logged (AGLM "收尾" or old-brain "最终回复") - stop polling a dead run
     $tail = (Adb shell logcat -d -t 5 -s AIButler 2>$null) -join ' '
-    if ($tail -match '\u6536\u5C3E') { Write-Output "[done] app logged task wrap-up, stopping polls"; break }
+    if ($tail -match '\u6536\u5C3E' -or $tail -match '\u6700\u7EC8\u56DE\u590D') { Write-Output "[done] app logged task wrap-up, stopping polls"; break }
     $logs = (Adb shell logcat -d -s AIButler 2>$null) -join "`n" -split "`n" |
       Where-Object { $_ -match 'AGLM round|finish|AGENT' } | Select-Object -Last 3
     Write-Output "[poll $i] fg=$fg"
