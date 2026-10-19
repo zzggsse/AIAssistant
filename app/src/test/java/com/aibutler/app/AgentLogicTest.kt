@@ -472,4 +472,19 @@ class AgentLogicTest {
         assertFalse(AgentEngine.shouldColdStart("接着做"))
         assertFalse(AgentEngine.shouldColdStart("resume the task"))
     }
+
+    // ========== 无进展熔断（真机抖音视频层79轮换坐标空转的回归） ==========
+
+    @Test
+    fun 无进展熔断_阈值低于80轮上限且高于软硬警告() {
+        assertTrue(AgentEngine.PROGRESS_STALL_ABORT_AT in 9..79)
+        assertTrue("应给软/硬警告留出空间", AgentEngine.PROGRESS_STALL_ABORT_AT >= 16)
+    }
+
+    @Test
+    fun 无进展熔断_文案说明原因和出路() {
+        assertTrue(AgentEngine.PROGRESS_STALL_ABORT_MESSAGE.contains("防卡死"))
+        assertTrue(AgentEngine.PROGRESS_STALL_ABORT_MESSAGE.contains("手动"))
+        assertTrue("应带上实际轮数", AgentEngine.PROGRESS_STALL_ABORT_MESSAGE.contains("16"))
+    }
 }

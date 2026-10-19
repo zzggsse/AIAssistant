@@ -2277,21 +2277,35 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 防空转：非等待动作重复=空转；页面文本完全没变的等待也=空转
                 // （原因：视频/广告动画页每帧截图都不同，截图哈希会失效，必须靠无障碍文本判断）
+                // 真机教训（抖音视频层79轮空转）：换着点的动作签名不同会绕过重复检测，
+                // 所以冻结页上的任何动作都计入空转——动作执行了但页面毫无变化=没进展
                 val isWait = answer.contains("Wait")
                 val sig = answer + "|" + res.info
                 if (!isWait) {
                     if (sig == lastProgressSig) noProgress++ else { noProgress = 1; lastProgressSig = sig }
-                } else if (frozenPage) {
-                    noProgress++
-                    android.util.Log.i("AIButler", "AGLM 静止等待计入空转 x$noProgress（页面文本未变化）")
                 }
-                if (noProgress >= 8) {
+                if (frozenPage) {
+                    noProgress++
+                    if (!isWait) {
+                        android.util.Log.i("AIButler", "AGLM 静止动作计入空转 x$noProgress（页面文本未变化）")
+                    } else {
+                        android.util.Log.i("AIButler", "AGLM 静止等待计入空转 x$noProgress（页面文本未变化）")
+                    }
+                }
+                if (noProgress >= AgentEngine.PROGRESS_STALL_ABORT_AT) {
+                    finalReply = AgentEngine.PROGRESS_STALL_ABORT_MESSAGE
+                    android.util.Log.i("AIButler", "AGLM 无进展熔断 x$noProgress，任务中止")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "🛑 $finalReply"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    break
+                } else if (noProgress >= 8) {
                     ctx.add(JsonObject().apply {
                         addProperty("role", "user")
                         addProperty("content", "🛑 系统提示：已连续${noProgress}步毫无进展。如果这不是合理的等待类任务，请立即换方法；否则请直接 finish(message=\"说明当前结果\") 结束。")
                     })
                     android.util.Log.i("AIButler", "AGLM 无进展防护触发(硬) x$noProgress")
-                    noProgress = 0
                 } else if (noProgress >= 5) {
                     ctx.add(JsonObject().apply {
                         addProperty("role", "user")
