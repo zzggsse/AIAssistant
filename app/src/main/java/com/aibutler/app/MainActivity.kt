@@ -1293,6 +1293,7 @@ class MainActivity : AppCompatActivity() {
             var noProgress = 0
             var fails = 0
             var parseFails = 0
+            var navMismatchCount = 0
             var lastScreenHash = ""
             var lastDumpSig = ""      // 上一轮无障碍页面文本指纹（动画页骗得过截图哈希，骗不过这个）
             var sameTapCount = 0
@@ -2101,6 +2102,20 @@ class MainActivity : AppCompatActivity() {
                     lastCardLabel = recParsed.second
                     lastCardPkg = appPkg
                     lastCardRound = round
+                }
+                // think-动作一致性防护（通用）：思考要点底部导航[我]，坐标却在屏幕中上部 → 拦截并要求重新定位
+                if (AgentEngine.thinkActNavMismatch(answer, recParsed?.third, recParsed?.fourth)) {
+                    navMismatchCount++
+                    if (navMismatchCount <= 2) {
+                        android.util.Log.i("AIButler", "AGLM think-act坐标纠正: tap=(${recParsed?.third},${recParsed?.fourth})")
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty("content", "⚠️ 坐标纠正：你上一步思考要点底部导航（[我]），但给的坐标在屏幕中上部，点击不会落在导航栏上。底部导航栏位于屏幕最底部（协议坐标y约930-990），[我]标签在最右下角（x约900、y约965）。请重新观察截图，直接输出点击右下角[我]的动作。")
+                        })
+                        continue
+                    }
+                } else {
+                    navMismatchCount = 0
                 }
                 val res = AgentEngine.execAutoGLM(
                     this, answer, realW, realH, userText, screenDump, guessedApp

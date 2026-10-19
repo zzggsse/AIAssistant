@@ -529,6 +529,20 @@ object AgentEngine {
         return screenText.replace(Regex("\\d+"), "").replace(Regex("\\s+"), " ").trim()
     }
 
+    /**
+     * think-动作一致性检查：思考说要点底部导航[我/我的]，但给的协议坐标明显不在导航栏。
+     * 真机教训：视觉脑在深色信息流上策略对、坐标错——think写"先点我"，Tap却落在[899,912]等
+     * 中上部位置。底部导航栏在协议坐标y约930-990，y<850即明显不在导航栏。
+     * 返回true=应拦截本次点击并注入坐标纠正（不能死拦，调用方要限制连续拦截次数）。
+     */
+    fun thinkActNavMismatch(answer: String, tapX: Int?, tapY: Int?): Boolean {
+        if (tapY == null || tapY !in 1..848) return false
+        val navIntent = answer.contains("底部导航") || answer.contains("导航栏") ||
+            Regex("(点击|进入|切到|切换到|回到)[「\"']?我[」\"'，。;；\\s页]").containsMatchIn(answer) ||
+            Regex("(点击|进入|切到|切换到|回到)[「\"']?我的[」\"'，。;；\\s页]").containsMatchIn(answer)
+        return navIntent
+    }
+
     /** 连续 Wait 卡死的纠正提示 */
     fun waitStallCorrectNote(count: Int): String =
         "⚠️ 系统提示：页面内容已连续 $count 轮完全相同，而你在持续 Wait。视频/进度大概率已结束，" +

@@ -505,4 +505,30 @@ class AgentLogicTest {
         assertNotEquals(a, b)
         assertEquals("", AgentEngine.fingerprint(" 123  456 "))
     }
+
+    // ========== think-动作一致性（真机：思考要点[我]，坐标落在屏幕中上部） ==========
+
+    @Test
+    fun 一致性_导航意图但坐标在中上部要纠正() {
+        val a = "当前是视频页。底部有导航栏：首页、商城、+、消息、我。我应该先点击\"我\"进入个人中心。do(action=\"Tap\", element=[499,834])"
+        assertTrue(AgentEngine.thinkActNavMismatch(a, 499, 834))
+    }
+
+    @Test
+    fun 一致性_坐标已在底部导航不纠正() {
+        val a = "点击右下角的我。do(action=\"Tap\", element=[930,965])"
+        assertFalse(AgentEngine.thinkActNavMismatch(a, 930, 965))
+    }
+
+    @Test
+    fun 一致性_钱包等具体目标不算导航意图() {
+        val a = "进入我的钱包查看余额。do(action=\"Tap\", element=[500,400])"
+        assertFalse(AgentEngine.thinkActNavMismatch(a, 500, 400))
+    }
+
+    @Test
+    fun 一致性_无导航意图不纠正() {
+        val a = "点击屏幕中央的视频。do(action=\"Tap\", element=[500,450])"
+        assertFalse(AgentEngine.thinkActNavMismatch(a, 500, 450))
+    }
 }
