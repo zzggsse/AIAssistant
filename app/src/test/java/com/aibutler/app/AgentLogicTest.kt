@@ -3,6 +3,7 @@ package com.aibutler.app
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -486,5 +487,22 @@ class AgentLogicTest {
         assertTrue(AgentEngine.PROGRESS_STALL_ABORT_MESSAGE.contains("防卡死"))
         assertTrue(AgentEngine.PROGRESS_STALL_ABORT_MESSAGE.contains("手动"))
         assertTrue("应带上实际轮数", AgentEngine.PROGRESS_STALL_ABORT_MESSAGE.contains("16"))
+    }
+
+    // ========== 页面指纹归一化（真机：视频流评论数跳动骗过冻结判定） ==========
+
+    @Test
+    fun 页面指纹_数字跳动不影响判定() {
+        val a = "评论182 拍同款 某音乐名"
+        val b = "评论183 拍同款 某音乐名"
+        assertEquals(AgentEngine.fingerprint(a), AgentEngine.fingerprint(b))
+    }
+
+    @Test
+    fun 页面指纹_结构变化仍可判别() {
+        val a = AgentEngine.fingerprint("评论182 拍同款")
+        val b = AgentEngine.fingerprint("私信 拍同款")
+        assertNotEquals(a, b)
+        assertEquals("", AgentEngine.fingerprint(" 123  456 "))
     }
 }

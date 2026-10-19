@@ -48,6 +48,7 @@ function Dismiss-SystemDialog([string]$PreferAppName) {
   $wholeScreen = -join @([char]0x6574, [char]0x4E2A, [char]0x5C4F, [char]0x5E55)
   foreach ($try in 1..5) {
     $d0 = Get-Dump "sysdlg$try"
+    if ([string]::IsNullOrEmpty($d0)) { return $true }
     if ($d0 -notmatch 'package="com\.android\.systemui"') { return $true }
     if ($d0 -match 'resource-id="com\.aibutler\.app:id/btnSend"' -and $d0 -notmatch 'oplus') { return $true }
     # (0) USER DIRECTIVE: always prefer ENTIRE SCREEN over single-app capture

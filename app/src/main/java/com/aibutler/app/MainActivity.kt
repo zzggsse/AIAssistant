@@ -1554,7 +1554,7 @@ class MainActivity : AppCompatActivity() {
                     break
                 }
                 // 页面文本指纹：本轮和上轮完全一致 = 冻结页（假倒计时/广告墙，等待无效）
-                val dumpSigNow = screenDump.hashCode().toString()
+                val dumpSigNow = AgentEngine.fingerprint(screenDump).hashCode().toString()
                 val prevRoundDumpSig = lastDumpSig
                 val frozenPage = dumpSigNow == lastDumpSig
                 lastDumpSig = dumpSigNow
