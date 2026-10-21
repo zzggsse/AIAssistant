@@ -125,7 +125,7 @@ class LearningModeController(private val service: AssistantAccessibilityService)
             return
         }
         if (sensitivePattern.containsMatchIn(ownLabel)) {
-            toast("出于安全考虑，学习模式不会记录支付、密码或删除类操作")
+            toast("出于安全考虑，录制模式不会记录支付、密码或删除类操作")
             return
         }
 
@@ -169,13 +169,13 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         val rect = Rect()
         if (node == null) return
         if (node.isPassword) {
-            toast("学习模式不会记录密码输入")
+            toast("录制模式不会记录密码输入")
             return
         }
         node.getBoundsInScreen(rect)
         val label = labelForNode(node)
         if (sensitivePattern.containsMatchIn(text) || sensitivePattern.containsMatchIn(label)) {
-            toast("学习模式不会记录疑似密码、验证码或敏感信息")
+            toast("录制模式不会记录疑似密码、验证码或敏感信息")
             return
         }
 
@@ -315,7 +315,7 @@ class LearningModeController(private val service: AssistantAccessibilityService)
 
     private fun refreshOverlay() {
         mainHandler.post {
-            overlayTitle?.text = "学习中 · ${stepCount}步"
+            overlayTitle?.text = "录制中 · ${stepCount}步"
         }
     }
 
@@ -332,7 +332,7 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         pendingScrollRunnable = null
         recording = true
         mainHandler.post {
-            overlayTitle?.text = "学习中 · 0步"
+            overlayTitle?.text = "录制中 · 0步"
             overlayActionButton?.text = "完成"
         }
     }

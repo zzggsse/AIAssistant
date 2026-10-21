@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">助手1</string>
+    <string name="accessibility_description">允许助手1读取当前屏幕并代替你执行点击、滑动和输入。</string>
+</resources>

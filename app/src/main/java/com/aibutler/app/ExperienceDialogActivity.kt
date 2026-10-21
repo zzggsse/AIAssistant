@@ -43,7 +43,6 @@ class ExperienceDialogActivity : AppCompatActivity() {
             return
         }
         val done: () -> Unit = {
-            DeveloperBallController.instance?.refreshPanel()
             finish()
         }
         when (intent?.getStringExtra(EXTRA_ACTION)) {

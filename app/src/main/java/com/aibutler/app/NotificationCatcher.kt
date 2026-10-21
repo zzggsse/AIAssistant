@@ -3,6 +3,9 @@ package com.aibutler.app
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.content.Context
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -16,9 +19,44 @@ class NotificationCatcher : NotificationListenerService() {
     companion object {
         data class Notif(val app: String, val title: String, val text: String, val time: Long)
 
-        val recent = ArrayDeque<Notif>()
+        private val gson = Gson()
+        private val type = object : TypeToken<MutableList<Notif>>() {}.type
+        private const val MAX_CACHED = 100
+
+        private val recent = ArrayDeque<Notif>()
+        private var loaded = false
+
+        private fun loadFromDisk(context: Context): MutableList<Notif> {
+            val f = java.io.File(context.filesDir, "notifications.json")
+            if (!f.exists()) return mutableListOf()
+            return try { gson.fromJson(f.readText(), type) ?: mutableListOf() } catch (_: Exception) { mutableListOf() }
+        }
+
+        private fun persist(context: Context) {
+            try {
+                val f = java.io.File(context.filesDir, "notifications.json")
+                AtomicFiles.write(f, gson.toJson(recent.toList()))
+            } catch (_: Exception) { }
+        }
+
+        fun init(context: Context) {
+            if (loaded) return
+            synchronized(recent) {
+                if (loaded) return
+                recent.addAll(loadFromDisk(context))
+                loaded = true
+            }
+        }
 
         fun snapshot(limit: Int): List<Notif> = synchronized(recent) { recent.takeLast(limit) }
+
+        fun add(context: Context, notif: Notif) {
+            synchronized(recent) {
+                recent.addLast(notif)
+                while (recent.size > MAX_CACHED) recent.removeFirst()
+            }
+            persist(context)
+        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -39,8 +77,10 @@ class NotificationCatcher : NotificationListenerService() {
         }
 
         synchronized(recent) {
-            recent.addLast(Notif(app, title, text, System.currentTimeMillis()))
-            while (recent.size > 50) recent.removeFirst()
+            val notif = Notif(app, title, text, System.currentTimeMillis())
+            recent.addLast(notif)
+            while (recent.size > MAX_CACHED) recent.removeFirst()
         }
+        persist(this)
     }
 }

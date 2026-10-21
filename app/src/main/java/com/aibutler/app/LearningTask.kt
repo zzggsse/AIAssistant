@@ -110,7 +110,7 @@ object LearningTaskStore {
     ): LearningReplayResult {
         val service = AssistantAccessibilityService.instance
             ?: return LearningReplayResult(false, 0, "无障碍服务未连接")
-        if (task.steps.isEmpty()) return LearningReplayResult(false, 0, "这个学习任务还没有记录到步骤")
+        if (task.steps.isEmpty()) return LearningReplayResult(false, 0, "这个任务还没有记录到步骤")
 
         if (task.targetPackage.isNotBlank() && service.currentPackage() != task.targetPackage) {
             openLearningTarget(activity, task)
@@ -191,7 +191,7 @@ object LearningTaskStore {
             }
         }
 
-        return LearningReplayResult(true, task.steps.size, "学习任务回放完成")
+        return LearningReplayResult(true, task.steps.size, "任务回放完成")
     }
 
     private fun openLearningTarget(activity: android.app.Activity, task: LearningTask) {
@@ -243,7 +243,7 @@ object LearningTaskStore {
                 .map { it.copy(highPriority = true) }
                 .toMutableList()
         } catch (e: Exception) {
-            Log.w(TAG, "读取学习任务失败", e)
+            Log.w(TAG, "读取录制任务失败", e)
             mutableListOf()
         }
     }

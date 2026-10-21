@@ -25,11 +25,14 @@ object AgentExperienceStore {
     private fun load(context: Context): MutableList<AgentExperience> {
         val target = file(context)
         if (!target.exists()) return mutableListOf()
-        return try {
+        val loaded = try {
             gson.fromJson<MutableList<AgentExperience>>(target.readText(), type) ?: mutableListOf()
         } catch (_: Exception) {
             mutableListOf()
         }
+        val clean = loaded.filterNot { isUnusableModelTranscript(it.content) }
+        if (clean.size != loaded.size) save(context, clean)
+        return clean.toMutableList()
     }
 
     private fun save(context: Context, items: List<AgentExperience>) {
@@ -70,6 +73,7 @@ object AgentExperienceStore {
     fun all(context: Context): List<AgentExperience> = load(context).sortedByDescending { it.updatedAt }
 
     fun upsert(context: Context, experience: AgentExperience) {
+        if (isUnusableModelTranscript(experience.content)) return
         val items = load(context)
         val normalizedTitle = experience.title.trim().lowercase().replace(Regex("\\s+"), "")
         val existingIndex = items.indexOfFirst { item ->
@@ -98,6 +102,15 @@ object AgentExperienceStore {
             items.removeAt(victim!!.index)
         }
         save(context, items)
+    }
+
+    private fun isUnusableModelTranscript(content: String): Boolean {
+        val normalized = content.trim()
+        return normalized.startsWith("用户要求") ||
+            normalized.contains("（上一任务的参考结果）") ||
+            normalized.contains("</think>", true) ||
+            normalized.contains("<answer>", true) ||
+            Regex("do\\s*\\(", RegexOption.IGNORE_CASE).containsMatchIn(normalized)
     }
 
     fun remove(context: Context, target: AgentExperience): Boolean {

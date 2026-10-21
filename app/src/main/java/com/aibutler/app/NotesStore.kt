@@ -47,7 +47,28 @@ object NotesStore {
         if (list.isEmpty()) return "没有找到包含「$keyword」的便签"
         val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
         return list.take(30).mapIndexed { i, n ->
-            "${i + 1}. 【${n.title}】${n.content} (${fmt.format(Date(n.time))})"
+            "${i + 1}. 【${n.title}】${n.content} (${fmt.format(Date(n.time))}) [id=${n.time}]"
         }.joinToString("\n")
+    }
+
+    fun update(c: Context, id: Long, newTitle: String, newContent: String): String {
+        val notes = load(c)
+        val idx = notes.indexOfFirst { it.time == id }
+        if (idx < 0) return "没有找到编号为 $id 的便签，请先 read_notes 确认编号"
+        notes[idx] = notes[idx].copy(
+            title = newTitle.ifBlank { notes[idx].title },
+            content = newContent.ifBlank { notes[idx].content },
+            time = System.currentTimeMillis()
+        )
+        save(c, notes)
+        return "已更新便签：「${notes[idx].title}」"
+    }
+
+    fun delete(c: Context, id: Long): String {
+        val notes = load(c)
+        val target = notes.firstOrNull { it.time == id }
+            ?: return "没有找到编号为 $id 的便签，请先 read_notes 确认编号"
+        save(c, notes.filterNot { it.time == id })
+        return "已删除便签：「${target.title}」"
     }
 }

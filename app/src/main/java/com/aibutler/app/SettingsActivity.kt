@@ -37,7 +37,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var btnFilterSuccessExperience: Button
     private lateinit var btnFilterFailureExperience: Button
 
-    /** 行为记录列表渲染：设置页和悬浮球面板共用同一套逻辑 */
+    /** 行为记录列表渲染：仅在设置页内查看和编辑 */
     private val experienceRenderer by lazy {
         ExperienceListRenderer(
             this, llExperienceList,
@@ -223,7 +223,6 @@ class SettingsActivity : AppCompatActivity() {
             Prefs.setDeveloperMode(this, checked)
             llDeveloperPanel.visibility = if (checked) android.view.View.VISIBLE else android.view.View.GONE
             if (checked) renderExperienceList() else llExperienceList.removeAllViews()
-            DeveloperBallController.instance?.onDeveloperModeChanged()
         }
 
         btnFilterAllExperience.setOnClickListener {
@@ -268,6 +267,26 @@ class SettingsActivity : AppCompatActivity() {
                 }
                 .show()
         }
+
+        // 错误日志查看/导出（开发者面板里）
+        val llDeveloperPanelLayout = llDeveloperPanel
+        val btnViewLog = Button(this).apply {
+            text = "查看错误日志"
+            setOnClickListener {
+                val logFile = CrashLogger.logFile(this@SettingsActivity)
+                val content = if (logFile.exists()) logFile.readText().take(4000) else "暂无错误日志"
+                androidx.appcompat.app.AlertDialog.Builder(this@SettingsActivity)
+                    .setTitle("错误日志（最近部分）\n${CrashLogger.deviceInfo()}")
+                    .setMessage(content)
+                    .setPositiveButton("清空") { _, _ ->
+                        CrashLogger.clear(this@SettingsActivity)
+                        Toast.makeText(this@SettingsActivity, "日志已清空", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("关闭", null)
+                    .show()
+            }
+        }
+        llDeveloperPanelLayout.addView(btnViewLog)
     }
 
     private fun applyVendorUi(position: Int) {

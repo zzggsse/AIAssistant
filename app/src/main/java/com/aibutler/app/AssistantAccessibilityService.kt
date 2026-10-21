@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Point
 import android.graphics.Path
 import android.graphics.Rect
@@ -19,6 +20,7 @@ import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
+import android.animation.ValueAnimator
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -62,7 +64,7 @@ class AssistantAccessibilityService : AccessibilityService() {
     private var stopBubbleCollapseRunnable: Runnable? = null
     private var successOverlayRoot: View? = null
     private var successConfirmLatch: CountDownLatch? = null
-    private var devBall: DeveloperBallController? = null
+    private var actionPreviewRoot: ActionTargetView? = null
 
     /** 任务开始时调用：在屏幕边缘挂一个可收进侧边的「停止任务」气泡 */
     fun showTaskControls() {
@@ -555,7 +557,6 @@ class AssistantAccessibilityService : AccessibilityService() {
         serviceInfo = serviceInfo.apply {
             eventTypes = eventTypes or AccessibilityEvent.TYPE_VIEW_SCROLLED
         }
-        devBall = DeveloperBallController(this).also { DeveloperBallController.instance = it }
         LearningModeController(this).also {
             LearningModeController.instance = it
         }
@@ -567,8 +568,6 @@ class AssistantAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        devBall?.shutdown()
-        devBall = null
         LearningModeController.instance?.stop()
         LearningModeController.instance = null
         VisualSampleController.instance?.hide()
@@ -576,6 +575,7 @@ class AssistantAccessibilityService : AccessibilityService() {
         taskOverlayRoot?.let(::removeFromOverlay)
         taskOverlayRoot = null
         taskOverlayParams = null
+        hideActionPreview()
         taskPopupRoot?.let(::removeFromOverlay)
         taskPopupRoot = null
         successOverlayRoot?.let(::removeFromOverlay)
@@ -587,10 +587,6 @@ class AssistantAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         LearningModeController.instance?.onAccessibilityEvent(event)
-        // 只用窗口切换事件驱动开发者悬浮球：在其他 App 里半隐显示，回到本 App 收起
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        val pkg = event.packageName?.toString() ?: return
-        devBall?.onAppForeground(pkg, event.className?.toString())
     }
 
     override fun onInterrupt() {}
@@ -604,6 +600,57 @@ class AssistantAccessibilityService : AccessibilityService() {
         @Suppress("DEPRECATION")
         val point = Point().also { windowManager.defaultDisplay.getRealSize(it) }
         return Pair(point.x, point.y)
+    }
+
+    /**
+     * 执行手势前，在目标位置显示短暂的高亮框和动作标签。
+     * 这层只做展示，不拦截触摸，因此不会影响被控应用或后续手势。
+     */
+    fun showActionPreview(
+        x: Float,
+        y: Float,
+        label: String = "",
+        action: String = "点击",
+        durationMs: Long = 650
+    ) {
+        val latch = CountDownLatch(1)
+        mainHandler.post {
+            actionPreviewRoot?.let(::removeFromOverlay)
+            val preview = ActionTargetView(this).apply {
+                setTarget(x, y, label, action)
+            }
+            actionPreviewRoot = preview
+            val added = addToOverlay(preview, modal = false) {
+                gravity = Gravity.TOP or Gravity.START
+                width = WindowManager.LayoutParams.MATCH_PARENT
+                height = WindowManager.LayoutParams.MATCH_PARENT
+                flags = flags or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+            }
+            if (added == null) {
+                actionPreviewRoot = null
+            }
+            latch.countDown()
+            mainHandler.postDelayed({
+                if (actionPreviewRoot === preview) {
+                    removeFromOverlay(preview)
+                    actionPreviewRoot = null
+                }
+            }, durationMs)
+        }
+        try {
+            latch.await(1, TimeUnit.SECONDS)
+            Thread.sleep(durationMs)
+        } catch (_: Exception) {
+        }
+    }
+
+    fun hideActionPreview() {
+        mainHandler.post {
+            actionPreviewRoot?.let(::removeFromOverlay)
+            actionPreviewRoot = null
+        }
     }
 
     /** 最近一次读屏的元素坐标表，供 click_number 按编号点击 */
@@ -623,6 +670,25 @@ class AssistantAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {
             "unknown"
         }
+    }
+
+    /**
+     * 任务收尾时回到助手对话。这里必须由无障碍服务上下文发起：
+     * 服务由系统绑定，比普通后台 Activity/线程更有资格绕过后台启动限制。
+     */
+    fun returnToConversation(fromPackage: String?, target: Class<*>) {
+        if (fromPackage == packageName) return
+        mainHandler.postDelayed({
+            runCatching {
+                startActivity(
+                    android.content.Intent(this, target)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                  android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+            }.onFailure {
+                android.util.Log.w("AIButler", "TASK finish return service failed", it)
+            }
+        }, 120L)
     }
 
     /** 从当前页面无障碍节点树生成稳定指纹（包名 + resource-id + 可点击元素文本，排序后取 MD5） */
@@ -922,16 +988,24 @@ class AssistantAccessibilityService : AccessibilityService() {
 
         // 优先点击本身可点击的节点，其次向上找可点击父节点，最后用手势坐标点
         for (n in nodes) {
-            if (n.isClickable && n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                return "已点击「$query」"
+            if (n.isClickable) {
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (!r.isEmpty) showActionPreview(r.exactCenterX(), r.exactCenterY(), query)
+                if (n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return "已点击「$query」"
             }
         }
         for (n in nodes) {
             var p: AccessibilityNodeInfo? = n
             var hops = 0
             while (p != null && !p.isClickable && hops < 6) { p = p.parent; hops++ }
-            if (p != null && p.isClickable && p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                return "已点击「$query」（点的是它的容器）"
+            if (p != null && p.isClickable) {
+                val r = Rect()
+                p.getBoundsInScreen(r)
+                if (!r.isEmpty) showActionPreview(r.exactCenterX(), r.exactCenterY(), query)
+                if (p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    return "已点击「$query」（点的是它的容器）"
+                }
             }
         }
         val n = nodes.first()
@@ -1024,5 +1098,83 @@ class AssistantAccessibilityService : AccessibilityService() {
         return if (down) "已向下滑动屏幕" else "已向上滑动屏幕"
     }
 
+    /** 左右滑动：right=true 表示内容向右移（等价于看左边的Tab/上一张图） */
+    fun scrollHorizontal(right: Boolean): String {
+        val (screenWidth, screenHeight) = realScreenSize()
+        val cy = screenHeight / 2f
+        val from = if (right) screenWidth * 0.25f else screenWidth * 0.75f
+        val to = if (right) screenWidth * 0.75f else screenWidth * 0.25f
+        val path = Path().apply { moveTo(from, cy); lineTo(to, cy) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 350))
+            .build()
+        dispatchGesture(gesture, null, null)
+        return if (right) "已向右滑动屏幕" else "已向左滑动屏幕"
+    }
+
     fun home(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
+
+    private class ActionTargetView(context: Context) : View(context) {
+        private var targetX = 0f
+        private var targetY = 0f
+        private var targetLabel = ""
+        private var actionName = "点击"
+        private var startTime = 0L
+        private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        private val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 12f, resources.displayMetrics)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        private val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 650
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            addUpdateListener { invalidate() }
+        }
+
+        fun setTarget(x: Float, y: Float, label: String, action: String) {
+            targetX = x
+            targetY = y
+            targetLabel = label.replace(Regex("\\s+"), " ").trim().take(28)
+            actionName = action
+            startTime = System.currentTimeMillis()
+            animator.start()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val time = ((System.currentTimeMillis() - startTime) % 650L) / 650f
+            val density = resources.displayMetrics.density
+            val base = minOf(width, height).toFloat() * 0.09f
+            val radius = base * (0.75f + time * 0.55f)
+            paint.style = android.graphics.Paint.Style.STROKE
+            paint.strokeWidth = density * 2.5f
+            paint.color = (((1f - time) * 180).toInt().shl(24)) or 0x1677FF
+            canvas.drawCircle(targetX, targetY, radius, paint)
+
+            paint.style = android.graphics.Paint.Style.FILL
+            paint.color = Color.parseColor("#E61677FF")
+            canvas.drawCircle(targetX, targetY, density * 3.5f, paint)
+
+            if (targetLabel.isNotBlank()) {
+                val text = "$actionName：$targetLabel"
+                val textWidth = textPaint.measureText(text)
+                val left = (targetX - textWidth / 2f - density * 9f)
+                    .coerceIn(density * 8f, width.toFloat() - textWidth - density * 26f)
+                val top = (targetY - base - density * 36f)
+                    .coerceIn(density * 12f, height.toFloat() - density * 46f)
+                val right = left + textWidth + density * 18
+                val bottom = top + density * 27
+                paint.color = Color.parseColor("#CC111827")
+                canvas.drawRoundRect(left, top, right, bottom, density * 13, density * 13, paint)
+                canvas.drawText(text, left + density * 9, bottom - density * 8, textPaint)
+            }
+        }
+
+        override fun onDetachedFromWindow() {
+            animator.cancel()
+            super.onDetachedFromWindow()
+        }
+    }
 }

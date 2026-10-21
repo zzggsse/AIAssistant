@@ -2,8 +2,12 @@ package com.aibutler.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.CalendarContract
 import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.ContactsContract
@@ -119,14 +123,15 @@ object DeviceTools {
         return "已冷启动 $packageName（已清除残留页面）"
     }
 
-    fun openApp(a: Activity, name: String, waitMs: Long = 1500L): String {
-        if (name.isBlank()) return "app_name 不能为空"
+    /** 按应用名从真实启动器列表解析包名；启动和任务期防误跳共用这一份逻辑。 */
+    fun resolveApp(a: Activity, name: String): Pair<String, String>? {
+        if (name.isBlank()) return null
         val pm = a.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val q = name.lowercase().trim()
         data class Cand(val label: String, val pkg: String, val score: Int)
-        val cands = pm.queryIntentActivities(intent, 0).mapNotNull { ri ->
-            val label = try { ri.loadLabel(pm).toString() } catch (e: Exception) { null }
+        return pm.queryIntentActivities(intent, 0).mapNotNull { ri ->
+            val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { null }
                 ?: return@mapNotNull null
             val l = label.lowercase()
             val score = when {
@@ -136,13 +141,20 @@ object DeviceTools {
                 else -> 0
             }
             if (score > 0) Cand(label, ri.activityInfo.packageName, score) else null
-        }.sortedByDescending { it.score }
-        val best = cands.firstOrNull() ?: return "手机上没找到名为「$name」的应用。可先调用 list_installed_apps 查看应用列表。"
-        val launch = pm.getLaunchIntentForPackage(best.pkg) ?: return "无法启动「${best.label}」"
+        }.maxWithOrNull(compareBy<Cand> { it.score }.thenByDescending { it.label.length })
+            ?.let { it.label to it.pkg }
+    }
+
+    fun openApp(a: Activity, name: String, waitMs: Long = 1500L): String {
+        if (name.isBlank()) return "app_name 不能为空"
+        val best = resolveApp(a, name)
+            ?: return "手机上没找到名为「$name」的应用。可先调用 list_installed_apps 查看应用列表。"
+        val launch = a.packageManager.getLaunchIntentForPackage(best.second)
+            ?: return "无法启动「${best.first}」"
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         a.startActivity(launch)
         if (waitMs > 0) Thread.sleep(waitMs)
-        return "已打开「${best.label}」，现在可以调用 get_screen_state 查看屏幕"
+        return "已打开「${best.first}」，现在可以调用 get_screen_state 查看屏幕"
     }
 
     fun lookupContact(a: Activity, nameOrNumber: String): String {
@@ -170,12 +182,168 @@ object DeviceTools {
             putExtra(AlarmClock.EXTRA_SKIP_UI, true)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        val alarmPackage = runCatching {
+            a.packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
+                ?.activityInfo?.packageName
+        }.getOrNull()
         return try {
             a.startActivity(i)
-            "已设置 %02d:%02d 的闹钟%s".format(hour, minute, if (label.isNotBlank()) "（$label）" else "")
+            val opened = showAlarmScreen(a, alarmPackage)
+            "已设置 %02d:%02d 的闹钟%s%s".format(
+                hour,
+                minute,
+                if (label.isNotBlank()) "（$label）" else "",
+                if (opened) "，并已打开时钟应用" else ""
+            )
         } catch (e: Exception) {
             "设置闹钟失败：${e.message}"
         }
+    }
+
+    fun cancelAlarm(a: Activity, hour: Int?, minute: Int?, label: String): String {
+        return try {
+            // 系统没有直接"按时间取消"的公开 intent，只能跳转闹钟列表让用户手动删。
+            // 如果给出了时间或备注，把信息一并告诉用户便于手动找到。
+            val i = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            a.startActivity(i)
+            val desc = buildString {
+                if (hour != null && minute != null) append(" %02d:%02d".format(hour, minute))
+                if (label.isNotBlank()) append("（$label）")
+            }
+            "已打开闹钟列表。系统不允许第三方 App 直接删除闹钟，请你手动找到$desc 的闹钟并删除。"
+        } catch (e: Exception) {
+            "取消闹钟失败：${e.message}"
+        }
+    }
+
+    fun findContact(a: Activity, nameOrKeyword: String): String {
+        if (a.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
+            return "缺少通讯录权限，请用户在系统设置中允许"
+        if (nameOrKeyword.isBlank()) return "关键词不能为空"
+        return try {
+            val cursor = a.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.TYPE
+                ),
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                arrayOf("%$nameOrKeyword%"), null
+            )
+            cursor?.use { c ->
+                if (!c.moveToFirst()) return "通讯录里没有找到包含「$nameOrKeyword」的联系人"
+                val results = StringBuilder()
+                var count = 0
+                while (c.moveToNext() && count < 10) {
+                    val name = c.getString(0) ?: "?"
+                    val number = c.getString(1) ?: "?"
+                    results.append("$name: $number\n")
+                    count++
+                }
+                "找到的联系人：\n${results.toString().trim()}"
+            } ?: "读取通讯录失败"
+        } catch (e: Exception) {
+            "读取通讯录失败：${e.message}"
+        }
+    }
+
+    fun createCalendarEvent(a: Activity, title: String, beginMillis: Long, endMillis: Long, desc: String): String {
+        if (title.isBlank()) return "日程标题不能为空"
+        return try {
+            val cr = a.contentResolver
+            val values = android.content.ContentValues().apply {
+                put(CalendarContract.Events.CALENDAR_ID, 1)
+                put(CalendarContract.Events.TITLE, title)
+                if (desc.isNotBlank()) put(CalendarContract.Events.DESCRIPTION, desc)
+                put(CalendarContract.Events.DTSTART, beginMillis)
+                put(CalendarContract.Events.DTEND, endMillis)
+                put(CalendarContract.Events.EVENT_TIMEZONE, java.util.TimeZone.getDefault().id)
+            }
+            val uri = cr.insert(CalendarContract.Events.CONTENT_URI, values)
+            if (uri != null) "已创建日程「$title」（${SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(beginMillis))}）"
+            else "创建日程失败：系统返回了空结果"
+        } catch (e: SecurityException) {
+            "缺少日历写入权限。请在系统设置里给本 App 开「日历」权限后重试"
+        } catch (e: Exception) {
+            "创建日程失败：${e.message}"
+        }
+    }
+
+    fun copyToClipboard(a: Activity, text: String): String {
+        if (text.isBlank()) return "要复制的内容不能为空"
+        return try {
+            val cm = a.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("AI小助手", text))
+            "已复制到剪贴板：「${text.take(60)}${if (text.length > 60) "…" else ""}」"
+        } catch (e: Exception) {
+            "复制失败：${e.message}"
+        }
+    }
+
+    fun readClipboard(a: Activity): String {
+        return try {
+            val cm = a.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val item = cm.primaryClip?.getItemAt(0)
+            val text = item?.coerceToText(a)?.toString()
+            if (text.isNullOrBlank()) "（剪贴板是空的）"
+            else "剪贴板内容：「${text.take(300)}${if (text.length > 300) "…" else ""}」"
+        } catch (e: Exception) {
+            "读取剪贴板失败：${e.message}"
+        }
+    }
+
+    /**
+     * SET_ALARM + SKIP_UI 在部分系统上只静默写入，不会把时钟应用带到前台。
+     * 设置完成后再显式打开闹钟列表；即使用户马上看见界面，也不会产生第二个闹钟。
+     */
+    private fun showAlarmScreen(a: Activity, alarmPackage: String?): Boolean {
+        val clockPackage = findClockPackage(a) ?: alarmPackage
+        val candidates = listOfNotNull(clockPackage, alarmPackage).distinct()
+
+        // 某些 ROM 会忽略无包名的 SHOW_ALARMS；先对真实时钟包显式发送。
+        for (pkg in candidates) {
+            val explicit = Intent(AlarmClock.ACTION_SHOW_ALARMS)
+                .setPackage(pkg)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { a.startActivity(explicit) }.isSuccess) return true
+        }
+
+        val genericShow = Intent(AlarmClock.ACTION_SHOW_ALARMS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (runCatching { a.startActivity(genericShow) }.isSuccess) return true
+
+        // 最后一层：直接启动时钟应用的 Launcher Activity，保证用户至少能看到目标 App。
+        for (pkg in candidates) {
+            val launch = runCatching { a.packageManager.getLaunchIntentForPackage(pkg) }
+                .getOrNull() ?: continue
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { a.startActivity(launch) }.isSuccess) return true
+        }
+        return false
+    }
+
+    /** 从真实启动器列表里找出时钟应用，避免写死某个厂商包名。 */
+    private fun findClockPackage(a: Activity): String? {
+        val pm = a.packageManager
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        data class Candidate(val pkg: String, val label: String, val score: Int)
+        return pm.queryIntentActivities(launcher, 0).mapNotNull { ri ->
+            val pkg = ri.activityInfo.packageName
+            if (pkg == a.packageName) return@mapNotNull null
+            val label = runCatching { ri.loadLabel(pm).toString() }.getOrDefault("")
+            val normalizedPkg = pkg.lowercase()
+            val normalizedLabel = label.lowercase()
+            val score = when {
+                normalizedPkg.contains("alarmclock") || normalizedPkg.contains("deskclock") -> 100
+                normalizedLabel == "时钟" || normalizedLabel == "闹钟" -> 100
+                normalizedLabel.contains("时钟") || normalizedLabel.contains("闹钟") -> 80
+                normalizedPkg.contains("clock") -> 60
+                normalizedLabel.contains("clock") -> 50
+                else -> 0
+            }
+            if (score <= 0) null else Candidate(pkg, label, score)
+        }.maxByOrNull { it.score }?.pkg
     }
 
     fun sendSms(a: Activity, contact: String, message: String): String {
@@ -270,7 +438,22 @@ object DeviceTools {
     fun webSearch(query: String): String {
         if (query.isBlank()) return "query 不能为空"
         val q = URLEncoder.encode(query, "UTF-8")
-        // 1) Bing
+        // 1) DuckDuckGo Lite（结构简单稳定，专为程序化访问设计）
+        try {
+            val html = httpGet("https://lite.duckduckgo.com/lite/?q=$q", timeout = 10000)
+            val out = Regex("(?is)<a[^>]*class=\"result-link\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>").findAll(html)
+                .take(8)
+                .mapIndexedNotNull { i, m ->
+                    val href = m.groupValues[1]
+                    val real = Regex("uddg=([^&]+)").find(href)?.groupValues?.get(1)
+                        ?.let { URLDecoder.decode(it, "UTF-8") } ?: href
+                    val title = stripHtml(m.groupValues[2])
+                    if (title.isBlank()) return@mapIndexedNotNull null
+                    "${i + 1}. $title\n   $real"
+                }.toList()
+            if (out.isNotEmpty()) return "「$query」的搜索结果:\n" + out.joinToString("\n\n")
+        } catch (_: Exception) { }
+        // 2) Bing（改版后可能失效，仅作备用）
         try {
             val html = httpGet("https://www.bing.com/search?q=$q&setlang=zh-CN&count=10")
             val blocks = Regex("(?is)<li class=\"b_algo\".*?</li>").findAll(html).take(8).toList()
@@ -285,7 +468,14 @@ object DeviceTools {
             }
             if (out.isNotEmpty()) return "「$query」的搜索结果:\n" + out.joinToString("\n\n")
         } catch (e: Exception) { }
-        // 2) DuckDuckGo 兜底
+        // 3) Jina Reader 搜索（通用，返回干净的文本结果）
+        try {
+            val result = httpGet("https://s.jina.ai/$q", timeout = 15000)
+            if (result.isNotBlank() && result.length > 50) {
+                return "「$query」的搜索结果:\n" + result.take(3000)
+            }
+        } catch (e: Exception) { }
+        // 4) DuckDuckGo HTML 兜底
         try {
             val html = httpGet("https://html.duckduckgo.com/html/?q=$q")
             val out = Regex("(?is)class=\"result__a\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>")
@@ -301,11 +491,22 @@ object DeviceTools {
     }
 
     fun readWebPage(rawUrl: String): String {
-        return try {
-            val url = if (rawUrl.startsWith("http")) rawUrl else "https://$rawUrl"
-            "网页内容（已提取正文）:\n" + stripHtml(httpGet(url)).take(3500)
-        } catch (e: Exception) {
-            "读取网页失败：${e.message}"
+        val url = if (rawUrl.startsWith("http")) rawUrl else "https://$rawUrl"
+        // 先试直接 HTTP GET + strip HTML（对静态页面足够）
+        try {
+            val content = stripHtml(httpGet(url, timeout = 10000))
+            if (content.length > 200) {
+                return "网页内容（已提取正文）:\n" + content.take(3500)
+            }
+        } catch (_: Exception) { }
+        // 内容太少或失败 → 用 Jina Reader（能处理 JS 渲染页）
+        try {
+            val readerUrl = "https://r.jina.ai/$url"
+            val content = httpGet(readerUrl, timeout = 20000)
+            if (content.isNotBlank() && content.length > 100) {
+                return "网页内容（Jina Reader 提取）:\n" + content.take(3500)
+            }
+        } catch (_: Exception) { }
+        return "读取网页失败：$url 可能需要登录、被反爬、或内容完全由 JS 渲染且 Reader 也不可用。建议用 open_url 打开让用户自己看"
         }
-    }
 }

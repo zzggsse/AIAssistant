@@ -360,7 +360,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="开始学习任务"
+                android:text="录制新任务"
                 android:textSize="15sp"
                 android:textColor="@color/colorTextPrimary" />
         </LinearLayout>
@@ -378,7 +378,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="本地图形样本"
+                android:text="图形样本库"
                 android:textSize="15sp"
                 android:textColor="@color/colorTextPrimary" />
         </LinearLayout>
@@ -396,7 +396,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="学习任务列表"
+                android:text="任务列表"
                 android:textSize="15sp"
                 android:textColor="@color/colorTextPrimary" />
         </LinearLayout>

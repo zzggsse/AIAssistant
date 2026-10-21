@@ -14,7 +14,7 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
 
     data class Msg(
         val role: String,
-        val text: String,
+        var text: String,
         var collapsed: Boolean = false,
         val imagePath: String? = null,
         var likeCount: Int = 0,

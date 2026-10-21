@@ -401,7 +401,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="查看正确和错误行为"
+                        android:text="在设置页查看正确和错误行为"
                         android:textSize="12sp"
                         android:textColor="@color/colorTextSecondary" />
                 </LinearLayout>
@@ -480,7 +480,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="💡 悬浮球：在其他 App 里屏幕边缘会半隐一个 📚 小球，点一下滑出这份记录，可直接编辑/删除；拖动可换边，无需悬浮窗权限"
+                    android:text="💡 这些记录可直接编辑/删除，帮 AI 复用成功经验、避开失败走法"
                     android:textSize="11sp"
                     android:textColor="@color/colorTextHint"
                     android:lineSpacingExtra="3dp" />

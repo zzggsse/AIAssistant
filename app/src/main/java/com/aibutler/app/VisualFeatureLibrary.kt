@@ -24,8 +24,8 @@ class VisualFeatureLibrary(context: Context) {
     fun add(source: Bitmap, label: String, packageName: String): VisualSample? {
         val cleanLabel = label.trim()
         if (cleanLabel.isBlank()) return null
-        val feature = VisualFeatureEncoder.extract(source)
-        if (feature.none { it != 0f }) return null
+        val vf = VisualFeatureEncoder.extract(source)
+        if (vf.phash == 0L) return null
         val id = UUID.randomUUID().toString()
         val imageFile = File(imageDir, "$id.jpg")
         if (!saveImage(source, imageFile)) return null
@@ -34,7 +34,8 @@ class VisualFeatureLibrary(context: Context) {
             label = cleanLabel.take(40),
             packageName = packageName,
             imagePath = imageFile.absolutePath,
-            feature = feature
+            phash = vf.phash,
+            colorFeature = vf.colorFeature
         )
         synchronized(this) {
             val items = load().toMutableList()
@@ -58,6 +59,19 @@ class VisualFeatureLibrary(context: Context) {
             items.removeAll { it.id == sampleId }
             AtomicFiles.write(indexFile, gson.toJson(items))
         }
+    }
+
+    fun rename(sampleId: String, newLabel: String): Boolean {
+        val cleanLabel = newLabel.trim()
+        if (cleanLabel.isBlank()) return false
+        synchronized(this) {
+            val items = load().toMutableList()
+            val index = items.indexOfFirst { it.id == sampleId }
+            if (index < 0) return false
+            items[index] = items[index].copy(label = cleanLabel.take(40))
+            AtomicFiles.write(indexFile, gson.toJson(items))
+        }
+        return true
     }
 
     fun clear() {
@@ -85,8 +99,8 @@ class VisualFeatureLibrary(context: Context) {
             val crop = Bitmap.createBitmap(screen, rect.left, rect.top, rect.width(), rect.height())
             val candidateFeature = VisualFeatureEncoder.extract(crop)
             if (crop !== screen) crop.recycle()
-            val best = samples.maxByOrNull { VectorMath.cosine(candidateFeature, it.feature) } ?: continue
-            val score = VectorMath.cosine(candidateFeature, best.feature)
+            val best = samples.maxByOrNull { combinedScore(candidateFeature, it) } ?: continue
+            val score = combinedScore(candidateFeature, best)
             if (score >= threshold) {
                 hits.add(
                     VisualMatch(
@@ -119,8 +133,14 @@ class VisualFeatureLibrary(context: Context) {
         val crop = Bitmap.createBitmap(screen, rect.left, rect.top, rect.width(), rect.height())
         val feature = VisualFeatureEncoder.extract(crop)
         if (crop !== screen) crop.recycle()
-        val best = samples.maxByOrNull { VectorMath.cosine(feature, it.feature) } ?: return Pair("", 0f)
-        return Pair(best.label, VectorMath.cosine(feature, best.feature))
+        val best = samples.maxByOrNull { combinedScore(feature, it) } ?: return Pair("", 0f)
+        return Pair(best.label, combinedScore(feature, best))
+    }
+
+    private fun combinedScore(query: VisualFeature, sample: VisualSample): Float {
+        val hashSim = 1.0f - VisualFeatureEncoder.hammingDistance(query.phash, sample.phash) / 64.0f
+        val colorSim = VectorMath.cosine(query.colorFeature, sample.colorFeature).coerceIn(0f, 1f)
+        return hashSim * 0.7f + colorSim * 0.3f
     }
 
     private fun recordMatch(sampleId: String) {
@@ -156,7 +176,7 @@ class VisualFeatureLibrary(context: Context) {
     }
 
     companion object {
-        const val MATCH_THRESHOLD = 0.86f
+        const val MATCH_THRESHOLD = 0.72f
         private const val MAX_SAMPLES = 500
         private const val MIN_WIDTH = 20
         private const val MIN_HEIGHT = 20

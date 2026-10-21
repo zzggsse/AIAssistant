@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.AssistantOne" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">#2F6FED</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:statusBarColor">#F4F6FB</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

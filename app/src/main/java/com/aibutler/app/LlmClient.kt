@@ -19,6 +19,126 @@ object LlmClient {
 
     data class Result(val content: String, val toolCalls: List<ToolCall>, val rawMessage: JsonObject)
 
+    // ========== 流式响应（SSE） ==========
+
+    /**
+     * 流式聊天：与 [chat] 参数一致，但加了 stream=true，每个 content delta 通过 [onDelta] 回调。
+     * 返回值和 [chat] 一样是完整的 [Result]，内容已全部拼接好。
+     * 网络错误、不支持 stream 的厂商会自动降级调 [chat]（不发 stream=true 重试一次）。
+     */
+    fun chatStream(
+        baseUrl: String,
+        apiKey: String,
+        model: String,
+        messages: JsonArray,
+        tools: JsonArray,
+        fastMode: Boolean = false,
+        onDelta: ((String) -> Unit)? = null
+    ): Result {
+        val body = JsonObject().apply {
+            addProperty("model", model)
+            add("messages", messages)
+            add("tools", tools)
+            addProperty("temperature", 0.3)
+            addProperty("stream", true)
+            if (fastMode) add("thinking", JsonObject().apply { addProperty("type", "disabled") })
+        }
+
+        val url = baseUrl.trimEnd('/') + "/chat/completions"
+        var conn: HttpURLConnection? = null
+        try {
+            conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15000
+            conn.readTimeout = 120000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Accept", "text/event-stream")
+            if (apiKey.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer $apiKey")
+            conn.outputStream.use {
+                it.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val errText = conn.errorStream
+                    ?.let { InputStreamReader(it, StandardCharsets.UTF_8).readText() } ?: ""
+                // 某些厂商不支持 stream，降级为非流式重试一次
+                if (code == 400 && (errText.contains("stream") || errText.contains("流式"))) {
+                    android.util.Log.w("AIButler", "chatStream: 厂商不支持stream，降级为非流式")
+                    return chat(baseUrl, apiKey, model, messages, tools, fastMode)
+                }
+                throw LlmException("HTTP $code：${errText.take(500)}")
+            }
+
+            val reader = java.io.BufferedReader(InputStreamReader(conn.inputStream, StandardCharsets.UTF_8))
+            val contentBuilder = StringBuilder()
+            data class ToolAccumulator(var id: String = "", var name: String = "", var args: StringBuilder = StringBuilder())
+            val toolAccum = LinkedHashMap<Int, ToolAccumulator>()
+            var finishReason = ""
+
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (!line.startsWith("data: ")) continue
+                val data = line.removePrefix("data: ").trim()
+                if (data == "[DONE]") break
+                try {
+                    val chunk = JsonParser.parseString(data).asJsonObject
+                    val choice = chunk.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject ?: continue
+                    choice.get("finish_reason")?.takeIf { !it.isJsonNull }?.asString?.let { finishReason = it }
+                    val delta = choice.getAsJsonObject("delta") ?: continue
+
+                    val contentDelta = delta.get("content")?.takeIf { !it.isJsonNull }?.asString
+                    if (!contentDelta.isNullOrBlank()) {
+                        contentBuilder.append(contentDelta)
+                        onDelta?.invoke(contentDelta)
+                    }
+
+                    delta.getAsJsonArray("tool_calls")?.forEach { tc ->
+                        val o = tc.asJsonObject
+                        val index = o.get("index")?.asInt ?: 0
+                        val acc = toolAccum.getOrPut(index) { ToolAccumulator() }
+                        o.get("id")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }?.let { acc.id = it }
+                        o.getAsJsonObject("function")?.let { fn ->
+                            fn.get("name")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }?.let { acc.name = it }
+                            fn.get("arguments")?.takeIf { !it.isJsonNull }?.asString?.let { acc.args.append(it) }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // 跳过格式异常的 chunk，继续读下一行
+                }
+            }
+
+            val toolCalls = toolAccum.values
+                .filter { it.name.isNotBlank() }
+                .map { ToolCall(it.id.ifBlank { "call_${System.nanoTime()}" }, it.name, it.args.toString().ifBlank { "{}" }) }
+
+            val rawMessage = JsonObject().apply {
+                addProperty("role", "assistant")
+                addProperty("content", contentBuilder.toString())
+                if (toolCalls.isNotEmpty()) {
+                    add("tool_calls", JsonArray().apply {
+                        toolCalls.forEach { tc ->
+                            add(JsonObject().apply {
+                                addProperty("id", tc.id)
+                                addProperty("type", "function")
+                                add("function", JsonObject().apply {
+                                    addProperty("name", tc.name)
+                                    addProperty("arguments", tc.arguments)
+                                })
+                            })
+                        }
+                    })
+                }
+            }
+
+            return Result(contentBuilder.toString(), toolCalls, rawMessage)
+        } catch (e: java.net.SocketTimeoutException) {
+            throw LlmException("流式请求超时，请检查网络或稍后重试")
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
     fun chat(
         baseUrl: String,
         apiKey: String,

@@ -59,6 +59,12 @@ class MainActivity : AppCompatActivity() {
         }
 
     private var lastA11yOk: Boolean? = null
+    @Volatile
+    private var activeTaskText: String? = null
+    @Volatile
+    private var lastCompletedTaskText: String? = null
+    @Volatile
+    private var lastCompletedTaskAt: Long = 0L
 
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -67,6 +73,23 @@ class MainActivity : AppCompatActivity() {
     private var pendingLearningFinish = false
     private var learningTargetPickerVisible = false
     private var captureStarting = false
+
+    // ===== 暂停后「继续」的恢复状态 =====
+    private data class PausedTask(
+        val mode: String,               // "normal" or "autoglm"
+        val userText: String,
+        val fromVoice: Boolean,
+        val contextUserText: String,
+        val plan: AgentEngine.TaskPlan?,
+        val currentStep: Int,
+        val launchedTarget: Pair<String, String>?,
+        val aglmCtx: JsonArray?,
+        val aglmGuessedApp: Pair<String, String>?,
+        val aglmRelatedMemory: String,
+        val historySnapshot: JsonArray
+    )
+    @Volatile
+    private var pausedTask: PausedTask? = null
 
     private data class LearningTargetOption(
         val label: String,
@@ -77,7 +100,13 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        android.util.Log.i("AIButler", "APP onCreate build=v10-10-1600 (双脑切换+AutoGLM专用脑+全能力)")
+        CrashLogger.install(this)
+        NotificationCatcher.init(this)
+        runCatching { AgentExperienceStore.all(this) }
+        val appVersion = runCatching {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull() ?: "unknown"
+        android.util.Log.i("AIButler", "APP onCreate build=v$appVersion (双脑切换+AutoGLM专用脑+全能力)")
         Prefs.ensureThinkingVisible(this)
 
         adapter = ChatAdapter(this)
@@ -141,6 +170,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         findViewById<ImageView>(R.id.btnMenu).setOnClickListener {
+            hideKeyboardForHistory()
             refreshHistory()
             drawerLayout.openDrawer(android.view.Gravity.START)
         }
@@ -157,7 +187,9 @@ class MainActivity : AppCompatActivity() {
             showLearningTaskDialog()
         }
         findViewById<View>(R.id.btnVisualSamples).setOnClickListener {
-            showVisualSampleLauncher()
+            VisualSampleListDialog.show(this) {
+                showVisualSampleLauncher()
+            }
         }
         tvProvider.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         tvTts.setOnClickListener {
@@ -224,6 +256,8 @@ class MainActivity : AppCompatActivity() {
 
         // 调试令牌：仅用于 adb 远程测试（令牌打印在 logcat，只有有 adb 权限的人能看到）
         val sp = Prefs.get(this)
+        lastCompletedTaskText = sp.getString("lastCompletedTaskText", null)
+        lastCompletedTaskAt = sp.getLong("lastCompletedTaskAt", 0L)
         var dbgTok = sp.getString("dbgToken", null)
         if (dbgTok == null) {
             dbgTok = java.util.UUID.randomUUID().toString().replace("-", "").take(10)
@@ -240,6 +274,11 @@ class MainActivity : AppCompatActivity() {
         }
         while (history.size() > 0) history.remove(0)
         adapter.newConversation()
+        lastCompletedTaskText = null
+        Prefs.get(this).edit()
+            .remove("lastCompletedTaskText")
+            .remove("lastCompletedTaskAt")
+            .apply()
         updateEmptyState()
         refreshHistory()
         if (closeDrawer) {
@@ -271,8 +310,11 @@ class MainActivity : AppCompatActivity() {
             if (msg.isNotEmpty()) {
                 etInput.setText("")
                 if (busy) {
-                    // 自动化测试会重复下发同一条指令：正在跑的任务直接叫停、新任务排队，
-                    // 保证每次 am start 都开启全新一轮，而不是被 pendingRun 吞掉造成轮次污染
+                        if (msg == activeTaskText || msg == pendingRun) {
+                            android.util.Log.i("AIButler", "AGLM dbg duplicate ignored while busy: $msg")
+                            return
+                        }
+                        // 只拦真正的重复下发；不同指令才允许取消当前任务并排队。
                     cancelRequested = true
                     pendingRun = msg
                     android.util.Log.i("AIButler", "AGLM dbg send while busy: cancel current task, queue new round")
@@ -290,12 +332,38 @@ class MainActivity : AppCompatActivity() {
         updateProviderChip()
         updateA11yBanner()
         updateEyeIcon()
+        resumePendingRunIfReady()
         if (pendingLearningFinish) {
             pendingLearningFinish = false
             promptSaveLearningTask()
         }
         removePermissionWarnings()
         updateEmptyState()
+    }
+
+    /** 权限补全后自动继续排队中的任务 */
+    private fun resumePendingRunIfReady() {
+        val pending = pendingRun ?: return
+        if (busy) return
+        if (!checkPermissionsOrLaunch()) return
+        pendingRun = null
+        Thread {
+            if (!CaptureService.isActive()) {
+                var waited = 0
+                while (!CaptureService.isActive() && waited < 5000) {
+                    Thread.sleep(200)
+                    waited += 200
+                }
+            }
+            runOnUiThread {
+                if (checkPermissionsOrLaunch()) {
+                    adapter.add(ChatAdapter.Msg("system", "▶️ 权限已就绪，继续执行刚才的任务"))
+                    runAgent(pending, fromVoice = false)
+                } else {
+                    pendingRun = pending
+                }
+            }
+        }.start()
     }
 
     /** 检查所有运行时权限，缺失的直接弹授权框 */
@@ -308,6 +376,10 @@ class MainActivity : AppCompatActivity() {
             needed.add(Manifest.permission.RECORD_AUDIO)
         if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.READ_CONTACTS)
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            if (checkSelfPermission(Manifest.permission.WRITE_CALENDAR) != PackageManager.PERMISSION_GRANTED)
+                needed.add(Manifest.permission.WRITE_CALENDAR)
+        }
         if (needed.isNotEmpty()) {
             requestPermissions(needed.toTypedArray(), 400)
             return
@@ -336,6 +408,14 @@ class MainActivity : AppCompatActivity() {
         tvHistoryEmpty.visibility = if (conversations.isEmpty()) View.VISIBLE else View.GONE
     }
 
+    private fun hideKeyboardForHistory() {
+        currentFocus?.let { focusedView ->
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(focusedView.windowToken, 0)
+        }
+        etInput.clearFocus()
+    }
+
     private fun openConversation(conversation: ConversationStore.Conversation) {
         if (busy) {
             Toast.makeText(this, "任务进行中，暂不能切换对话", Toast.LENGTH_SHORT).show()
@@ -343,6 +423,11 @@ class MainActivity : AppCompatActivity() {
         }
         while (history.size() > 0) history.remove(0)
         adapter.switchTo(conversation.id)
+        lastCompletedTaskText = null
+        Prefs.get(this).edit()
+            .remove("lastCompletedTaskText")
+            .remove("lastCompletedTaskAt")
+            .apply()
         updateEmptyState()
         refreshHistory()
         rv.scrollToPosition(adapter.items.size - 1)
@@ -436,12 +521,31 @@ class MainActivity : AppCompatActivity() {
         if (lastA11yOk == null || lastA11yOk != ok) {
             if (!ok) {
                 adapter.add(ChatAdapter.Msg("system", "⚠️ 无障碍服务未连接，发指令时会自动弹出授权页面"))
+                oemHint()?.let { adapter.add(ChatAdapter.Msg("system", it)) }
             } else {
                 removePermissionWarnings()
                 adapter.add(ChatAdapter.Msg("system", "✅ 无障碍服务已连接，可以自动操作手机了"))
             }
         }
         lastA11yOk = ok
+    }
+
+    /** 国产 ROM 后台限制提示：检测到限制型厂商时给用户一行引导 */
+    private fun oemHint(): String? {
+        val m = android.os.Build.MANUFACTURER.lowercase()
+        return when {
+            m.contains("xiaomi") || m.contains("redmi") ->
+                "💡 小米手机：设置→应用管理→AI小助手→自启动 打开；省电策略设为「无限制」"
+            m.contains("huawei") || m.contains("honor") ->
+                "💡 华为/荣耀：设置→电池→启动管理→AI小助手→关闭自动管理，允许后台活动"
+            m.contains("oppo") || m.contains("realme") || m.contains("oneplus") ->
+                "💡 OPPO/一加：设置→电池→应用耗电管理→AI小助手→允许后台运行"
+            m.contains("vivo") || m.contains("iqoo") ->
+                "💡 vivo：设置→电池→后台耗电→AI小助手→允许后台高耗电"
+            m.contains("samsung") ->
+                "💡 三星：设置→电池→后台使用限制→确保AI小助手不在休眠列表中"
+            else -> null
+        }
     }
 
     private fun updateProviderChip() {
@@ -553,18 +657,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun startLearningMode() {
         if (busy) {
-            Toast.makeText(this, "AI 正在执行任务，请先停止后再开始学习", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "AI 正在执行任务，请先停止后再开始录制", Toast.LENGTH_SHORT).show()
             return
         }
         val service = AssistantAccessibilityService.instance
         val controller = LearningModeController.instance
         if (service == null || controller == null) {
-            adapter.add(ChatAdapter.Msg("system", "学习模式需要先开启无障碍服务。"))
+            adapter.add(ChatAdapter.Msg("system", "任务录制需要先开启无障碍服务。"))
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
         if (controller.isActive) {
-            Toast.makeText(this, "学习模式已经开始了", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "录制已经开始了", Toast.LENGTH_SHORT).show()
             return
         }
         if (learningTargetPickerVisible) return
@@ -620,7 +724,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(18), dp(10), dp(18), dp(4))
         }
         root.addView(TextView(dialogContext).apply {
-            text = "先选择学习目标"
+            text = "先选择录制目标"
             textSize = 18f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(getColor(R.color.colorTextPrimary))
@@ -755,7 +859,7 @@ class MainActivity : AppCompatActivity() {
         if (!hasSteps) {
             pendingLearningFinish = false
             runOnUiThread {
-                adapter.add(ChatAdapter.Msg("system", "学习模式已结束，没有记录到可回放步骤。"))
+                adapter.add(ChatAdapter.Msg("system", "录制已结束，没有记录到可回放步骤。"))
             }
             return
         }
@@ -769,12 +873,12 @@ class MainActivity : AppCompatActivity() {
     private fun promptSaveLearningTask() {
         val controller = LearningModeController.instance
         if (controller == null) {
-            adapter.add(ChatAdapter.Msg("system", "学习模式已结束，没有记录到可回放步骤。"))
+            adapter.add(ChatAdapter.Msg("system", "录制已结束，没有记录到可回放步骤。"))
             return
         }
         val steps = controller.takeRecording()
         if (steps.isEmpty()) {
-            adapter.add(ChatAdapter.Msg("system", "学习模式已结束，没有记录到可回放步骤。"))
+            adapter.add(ChatAdapter.Msg("system", "录制已结束，没有记录到可回放步骤。"))
             return
         }
 
@@ -795,14 +899,14 @@ class MainActivity : AppCompatActivity() {
                 if (steps.size > 8) "\n• ...共${steps.size}步" else ""
 
         AlertDialog.Builder(this)
-            .setTitle("保存学习任务")
+            .setTitle("保存录制任务")
             .setMessage("已记录 ${steps.size} 步：\n$preview\n\n目标：$targetName\n\n给这个任务起一个以后能直接说出的名字。")
             .setView(input)
             .setNegativeButton("丢弃") { _, _ ->
-                adapter.add(ChatAdapter.Msg("system", "已丢弃本次学习记录。"))
+                adapter.add(ChatAdapter.Msg("system", "已丢弃本次录制记录。"))
             }
             .setPositiveButton("保存") { _, _ ->
-                val name = input.text.toString().trim().ifBlank { "未命名学习任务" }
+                val name = input.text.toString().trim().ifBlank { "未命名任务" }
                 val task = LearningTask(
                     id = UUID.randomUUID().toString(),
                     name = name,
@@ -817,7 +921,7 @@ class MainActivity : AppCompatActivity() {
                 etInput.setText("")
                 adapter.add(ChatAdapter.Msg(
                     "assistant",
-                    "✅ 已保存学习任务「${task.name}」（${task.steps.size}步）。以后说出任务名，我会先确认再回放。"
+                    "✅ 已保存任务「${task.name}」（${task.steps.size}步）。以后说出任务名，我会先确认再回放。"
                 ))
             }
             .show()
@@ -827,8 +931,8 @@ class MainActivity : AppCompatActivity() {
         val activity = this
         if (LearningModeController.instance?.isActive == true) {
             AlertDialog.Builder(this)
-                .setTitle("学习模式进行中")
-                .setMessage("学习悬浮条在屏幕上方。完成手动操作后点“完成”回来命名。")
+                .setTitle("任务录制进行中")
+                .setMessage("录制悬浮条在屏幕上方。完成手动操作后点“完成”回来命名。")
                 .setPositiveButton("好的", null)
                 .show()
             return
@@ -842,7 +946,7 @@ class MainActivity : AppCompatActivity() {
 
         if (tasks.isEmpty()) {
             container.addView(TextView(this).apply {
-                text = "还没有学习任务。先点左侧的“开始学习任务”，手动完成一遍后保存。"
+                text = "还没有任务。先点左侧的「录制新任务」，手动完成一遍后保存。"
                 textSize = 14f
                 setTextColor(getColor(R.color.colorTextSecondary))
             })
@@ -858,7 +962,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     setOnLongClickListener {
                         AlertDialog.Builder(activity)
-                            .setTitle("删除学习任务")
+                            .setTitle("删除任务")
                             .setMessage("确定删除「${task.name}」吗？")
                             .setNegativeButton("取消", null)
                             .setPositiveButton("删除") { _, _ ->
@@ -873,7 +977,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         AlertDialog.Builder(activity)
-            .setTitle("学习任务")
+            .setTitle("任务列表")
             .setView(scroll)
             .setNegativeButton("关闭", null)
             .show()
@@ -888,7 +992,7 @@ class MainActivity : AppCompatActivity() {
             AlertDialog.Builder(this)
                 .setTitle("回放「${task.name}」")
                 .setMessage("将要执行：\n$detail\n\n确认后助手会逐步执行；失败时会交给 AI 继续处理。")
-                .setNegativeButton("不使用学习路径") { _, _ -> latch.countDown() }
+                .setNegativeButton("不使用已录路径") { _, _ -> latch.countDown() }
                 .setPositiveButton("确认回放") { _, _ ->
                     confirmed[0] = true
                     latch.countDown()
@@ -902,15 +1006,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun executeLearningReplay(task: LearningTask): Boolean {
         runOnUiThread {
-            adapter.add(ChatAdapter.Msg("system", "🎓 开始回放学习任务「${task.name}」…"))
+            adapter.add(ChatAdapter.Msg("system", "▶️ 开始回放任务「${task.name}」…"))
         }
         val result = LearningTaskStore.replay(this, task) { cancelRequested }
         runOnUiThread {
             if (result.success) {
                 LearningTaskStore.markUsed(this, task.id)
-                adapter.add(ChatAdapter.Msg("assistant", "✅ 已完成学习任务「${task.name}」。"))
+                adapter.add(ChatAdapter.Msg("assistant", "✅ 已完成任务「${task.name}」。"))
             } else if (result.cancelled) {
-                adapter.add(ChatAdapter.Msg("system", "⏸️ 学习任务已停止。"))
+                adapter.add(ChatAdapter.Msg("system", "⏸️ 任务回放已停止。"))
             } else {
                 adapter.add(ChatAdapter.Msg("system", "⚠️ ${result.message}。正在交给 AI 继续处理。"))
             }
@@ -920,20 +1024,71 @@ class MainActivity : AppCompatActivity() {
 
     private fun runAgent(userText: String, fromVoice: Boolean, skipLearning: Boolean = false) {
         if (LearningModeController.instance?.isActive == true) {
-            Toast.makeText(this, "学习模式进行中，请先点学习条上的“完成”", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "录制进行中，请先点录制条上的「完成」", Toast.LENGTH_SHORT).show()
             return
         }
+        // ===== 暂停恢复：用户说「继续」且刚暂停过 → 恢复上下文继续执行 =====
+        val trimmedText = userText.trim()
+        if ((trimmedText == "继续" || trimmedText == "接着做" || trimmedText == "接着来") && pausedTask != null && !busy) {
+            val saved = pausedTask!!
+            pausedTask = null
+            cancelRequested = false
+            busy = true
+            TaskControlBus.taskRunning = true
+            AssistantAccessibilityService.instance?.showTaskControls()
+            setBusyUi(true)
+            AgentKeepAliveService.start(this)
+            adapter.add(ChatAdapter.Msg("user", userText))
+            adapter.add(ChatAdapter.Msg("system", "▶️ 正在恢复之前的任务：${saved.userText.take(50)}…"))
+            rv.scrollToPosition(adapter.items.size - 1)
+
+            Thread {
+                try {
+                    if (saved.mode == "autoglm" && saved.aglmCtx != null) {
+                        resumeAutoGLMFrom(saved)
+                    } else {
+                        resumeNormalFrom(saved)
+                    }
+                } catch (e: Exception) {
+                    CrashLogger.log("RESUME", "Failed to resume task", e)
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "❌ 恢复任务出错：${e.message}，请重新描述任务"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                } finally {
+                    busy = false
+                    TaskControlBus.taskRunning = false
+                    AssistantAccessibilityService.instance?.hideTaskControls()
+                    AgentKeepAliveService.stop(this@MainActivity)
+                    runOnUiThread { setBusyUi(false) }
+                    returnToConversationAfterTask()
+                }
+            }.start()
+            return
+        }
+        // 不是「继续」→ 清掉旧的暂停状态，走新任务
+        if (trimmedText != "继续") pausedTask = null
+        val isRepeatedCompletedTask = trimmedText == lastCompletedTaskText &&
+            System.currentTimeMillis() - lastCompletedTaskAt < 60_000
+        if (isRepeatedCompletedTask) {
+            Toast.makeText(this, "已拦截自动重复指令；如需重跑，请开启新对话", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         if (busy) {
             Toast.makeText(this, "⏳ AI 正忙，任务已排队，完成后自动开始", Toast.LENGTH_SHORT).show()
             pendingRun = (pendingRun?.plus("\n") ?: "") + userText
             return
         }
-        if (!Prefs.configured(this)) {
+        val directAlarm = NativeTaskRouter.parseAlarmRequest(userText)
+        val directNote = NativeTaskRouter.parseNoteRequest(userText)
+        val isNativeDirectTask = directAlarm != null || directNote != null
+        if (!isNativeDirectTask && !Prefs.configured(this)) {
             adapter.add(ChatAdapter.Msg("system", "还没配置 AI 厂商，请先点右上角 ⚙️ 设置。"))
             startActivity(Intent(this, SettingsActivity::class.java))
             return
         }
-        if (!checkPermissionsOrLaunch()) {
+        if (!isNativeDirectTask && !checkPermissionsOrLaunch()) {
             pendingRun = userText
             return
         }
@@ -943,6 +1098,7 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.i("AIButler", "APP 屏幕熄灭/锁定中启动任务——将尝试自动亮屏解锁")
         }
         busy = true
+        activeTaskText = userText
         cancelRequested = false
         TaskControlBus.taskRunning = true
         AssistantAccessibilityService.instance?.showTaskControls()
@@ -958,6 +1114,47 @@ class MainActivity : AppCompatActivity() {
             var paused = false
             var learningFallback = false
             try {
+                if (directAlarm != null) {
+                    android.util.Log.i(
+                        "AIButler",
+                        "NATIVE alarm direct: ${directAlarm.hour}:${directAlarm.minute} label=${directAlarm.label}"
+                    )
+                    // 与所有其他任务共用同一条“先进入真实目标应用”的通用启动链路。
+                    launchTargetAppForTask(userText, contextUserText)
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg(
+                            "system",
+                            "⏰ 正在设置 %02d:%02d 的闹钟并打开时钟应用…".format(
+                                directAlarm.hour,
+                                directAlarm.minute
+                            )
+                        ))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    val args = JsonObject().apply {
+                        addProperty("hour", directAlarm.hour)
+                        addProperty("minute", directAlarm.minute)
+                        if (directAlarm.label.isNotBlank()) addProperty("label", directAlarm.label)
+                    }
+                    val result = AgentEngine.execute(this, "set_alarm", args.toString())
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("assistant", "✅ $result"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    return@Thread
+                }
+                if (directNote != null) {
+                    val args = JsonObject().apply {
+                        addProperty("title", directNote.title)
+                        addProperty("content", directNote.content)
+                    }
+                    val result = AgentEngine.execute(this, "create_note", args.toString())
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("assistant", "✅ $result\n内容：${directNote.content}"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    return@Thread
+                }
                 if (!skipLearning) {
                     val learningTask = LearningTaskStore.findMatch(this, userText)
                     if (learningTask != null && learningTask.steps.isNotEmpty()) {
@@ -1026,6 +1223,11 @@ class MainActivity : AppCompatActivity() {
                 } else if (Prefs.autoGlm(this) && skipAutoGlm) {
                     android.util.Log.i("AIButler", "纯聊天/问答类请求，跳过AutoGLM：$userText")
                 }
+                // 普通大脑也先做通用目标应用路由：显式 App 名优先，未点名时由真实安装列表语义选择。
+                // 这一步发生在模型执行前，因此任何任务都不再依赖模型是否恰好调用 open_app。
+                val launchedTarget = if (!chatPlan && !looksLikeChat && !hasNativeToolMatch) {
+                    launchTargetAppForTask(userText, contextUserText)
+                } else null
                 if (plan?.steps?.isNotEmpty() == true) {
                     val shownPlan = plan!!
                     runOnUiThread {
@@ -1038,15 +1240,34 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                // ===== 跨任务上下文隔离：新任务开始时清掉上一轮的工具调用残留 =====
+                // 保留 system 提示和上一轮的最终回答（作为上一任务的参考），其余全清。
+                run {
+                    val lastAssistantReply = StringBuilder()
+                    for (i in history.size() - 1 downTo 0) {
+                        val e = history.get(i).asJsonObject
+                        if (e.get("role")?.asString == "assistant" &&
+                            e.get("tool_calls") == null &&
+                            e.get("content")?.asString?.isNotBlank() == true) {
+                            lastAssistantReply.append(e.get("content").asString.take(500))
+                            break
+                        }
+                    }
+                    while (history.size() > 0) history.remove(0)
+                    if (lastAssistantReply.isNotBlank()) {
+                        history.add(AgentEngine.msg("assistant", "（上一任务的参考结果）${lastAssistantReply}"))
+                    }
+                }
+
                 // 确保 system 提示永远在第一位（JsonArray 不能按位插入，只能重建）
                 if (history.size() == 0 || history.get(0).asJsonObject.get("role")?.asString != "system") {
                     val fresh = JsonArray()
-                    fresh.add(AgentEngine.systemPrompt(plan, currentStep, relatedExp).let { AgentEngine.msg("system", it) })
+                    fresh.add(AgentEngine.systemPrompt(plan, currentStep, relatedExp, hasNativeToolMatch).let { AgentEngine.msg("system", it) })
                     for (e in history) fresh.add(e)
                     while (history.size() > 0) history.remove(0)
                     for (e in fresh) history.add(e)
                 } else {
-                    history.get(0).asJsonObject.addProperty("content", AgentEngine.systemPrompt(plan, currentStep, relatedExp))
+                    history.get(0).asJsonObject.addProperty("content", AgentEngine.systemPrompt(plan, currentStep, relatedExp, hasNativeToolMatch))
                 }
                 history.add(AgentEngine.msg("user", userText))
 
@@ -1073,10 +1294,45 @@ class MainActivity : AppCompatActivity() {
                     // 动作后的页面加载已由各工具内部等待处理，这里只留短间隔让界面动画收尾
                     if (round > 1) Thread.sleep(300)
                     android.util.Log.i("AIButler", "AGENT round=$round 开始请求模型")
-                    val res = LlmClient.chat(
-                        Prefs.baseUrl(this), Prefs.apiKey(this), Prefs.model(this),
-                        sanitizeHistory(), AgentEngine.toolsJson(), Prefs.fastMode(this)
-                    )
+                    // 流式响应：用户实时看到内容增长，不再干等
+                    var streamIdx = -1
+                    val streamBuf = StringBuilder()
+                    val res = try {
+                        LlmClient.chatStream(
+                            Prefs.baseUrl(this), Prefs.apiKey(this), Prefs.model(this),
+                            sanitizeHistory(), AgentEngine.toolsJson(), Prefs.fastMode(this),
+                            onDelta = { chunk ->
+                                streamBuf.append(chunk)
+                                val text = streamBuf.toString()
+                                runOnUiThread {
+                                    if (streamIdx < 0 || streamIdx >= adapter.items.size) {
+                                        adapter.items.add(ChatAdapter.Msg("assistant", text))
+                                        streamIdx = adapter.items.size - 1
+                                    } else {
+                                        adapter.items[streamIdx].text = text
+                                    }
+                                    adapter.notifyDataSetChanged()
+                                    rv.scrollToPosition(adapter.items.size - 1)
+                                }
+                            }
+                        )
+                    } catch (e: Exception) {
+                        CrashLogger.log("STREAM_FALLBACK", "chatStream failed, falling back to non-streaming", e)
+                        LlmClient.chat(
+                            Prefs.baseUrl(this), Prefs.apiKey(this), Prefs.model(this),
+                            sanitizeHistory(), AgentEngine.toolsJson(), Prefs.fastMode(this)
+                        )
+                    }
+                    // 清除流式过渡气泡（后续由 emitThinking / 最终 assistant 消息替代）
+                    if (streamIdx >= 0) {
+                        val idx = streamIdx
+                        runOnUiThread {
+                            if (idx < adapter.items.size && adapter.items[idx].role == "assistant") {
+                                adapter.items.removeAt(idx)
+                                adapter.notifyDataSetChanged()
+                            }
+                        }
+                    }
                     android.util.Log.i("AIButler", "AGENT round=$round 返回: 文本=${res.content.length}字 工具调用=${res.toolCalls.size}个")
                     emitThinking(res.rawMessage)
                     // 深度思考内容不能回传给接口，剥掉；空内容也补齐，避免 message参数非法(1214)
@@ -1101,7 +1357,7 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             adapter.add(ChatAdapter.Msg("assistant", reply))
                             rv.scrollToPosition(adapter.items.size - 1)
-                            if (speakOn && fromVoice && ttsReady && !cancelRequested) speak(reply)
+                            if (speakOn && ttsReady && !cancelRequested) speak(reply)
                         }
                         done = true
                         break
@@ -1166,7 +1422,46 @@ class MainActivity : AppCompatActivity() {
                             history.add(AgentEngine.toolMsg(call.id, stepResult))
                             continue
                         }
-                        val result = AgentEngine.execute(this@MainActivity, call.name, call.arguments)
+                        // ===== replan 工具：AI 主动请求重新规划 =====
+                        if (call.name == "replan") {
+                            val replanReason = try {
+                                JsonParser.parseString(call.arguments).asJsonObject
+                                    .get("reason")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                            } catch (e: Exception) { "" }
+                            CrashLogger.log("REPLAN", "AI requested replan: $replanReason")
+                            if (replansUsed < 3) {
+                                try {
+                                    val replanMsgs = JsonArray()
+                                    replanMsgs.add(AgentEngine.msg("user", AgentEngine.plannerPrompt(
+                                        "$userText\n\n（AI 请求重新规划，原因：$replanReason。请给出新的执行计划。）",
+                                        contextUserText
+                                    )))
+                                    val replanRes = LlmClient.chat(
+                                        Prefs.baseUrl(this), Prefs.apiKey(this), Prefs.model(this),
+                                        replanMsgs, JsonArray(), Prefs.fastMode(this)
+                                    )
+                                    val newPlan = AgentEngine.parsePlan(replanRes.content)
+                                    if (newPlan?.steps?.isNotEmpty() == true) {
+                                        plan = newPlan
+                                        currentStep = 1
+                                        stepRetries = 0
+                                        replansUsed++
+                                        if (history.size() > 0 && history.get(0).asJsonObject.get("role")?.asString == "system") {
+                                            history.get(0).asJsonObject.addProperty("content", AgentEngine.systemPrompt(plan, currentStep, relatedExp))
+                                        }
+                                        runOnUiThread {
+                                            adapter.add(ChatAdapter.Msg("system", "🔄 AI 请求重新规划：$replanReason\n已生成新计划（第${replansUsed}次重新规划）"))
+                                            rv.scrollToPosition(adapter.items.size - 1)
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    CrashLogger.log("REPLAN_FAIL", "replan failed", e)
+                                }
+                            }
+                            history.add(AgentEngine.toolMsg(call.id, "已处理重新规划请求。请继续按新计划执行。"))
+                            continue
+                        }
+                        val result = AgentEngine.execute(this@MainActivity, call.name, call.arguments, launchedTarget?.second)
                         // 防空转1：连续完全相同调用
                         val sig = call.name + ":" + call.arguments
                         if (sig == lastSig) repCount++ else { repCount = 1; lastSig = sig }
@@ -1199,6 +1494,19 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (paused) {
                     android.util.Log.i("AIButler", "AGENT 结束: 用户暂停")
+                    pausedTask = PausedTask(
+                        mode = "normal",
+                        userText = userText,
+                        fromVoice = fromVoice,
+                        contextUserText = contextUserText,
+                        plan = plan,
+                        currentStep = currentStep,
+                        launchedTarget = launchedTarget,
+                        aglmCtx = null,
+                        aglmGuessedApp = null,
+                        aglmRelatedMemory = relatedExp,
+                        historySnapshot = history.deepCopy()
+                    )
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg("system", "⏸️ 已暂停。想继续就说「继续」，想改主意直接说新的指令。"))
                         rv.scrollToPosition(adapter.items.size - 1)
@@ -1206,12 +1514,20 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 android.util.Log.e("AIButler", "AGENT 异常", e)
+                CrashLogger.log("AGENT", "Agent task failed for: $userText", e)
                 runOnUiThread {
                     adapter.add(ChatAdapter.Msg("system", "❌ 出错了：${e.message}"))
                     rv.scrollToPosition(adapter.items.size - 1)
                 }
             } finally {
                 busy = false
+                activeTaskText = null
+                lastCompletedTaskText = userText
+                lastCompletedTaskAt = System.currentTimeMillis()
+                Prefs.get(this).edit()
+                    .putString("lastCompletedTaskText", userText)
+                    .putLong("lastCompletedTaskAt", lastCompletedTaskAt)
+                    .apply()
                 TaskControlBus.taskRunning = false
                 AssistantAccessibilityService.instance?.hideTaskControls()
                 AgentKeepAliveService.stop(this@MainActivity)
@@ -1228,10 +1544,34 @@ class MainActivity : AppCompatActivity() {
                             adapter.add(ChatAdapter.Msg("system", "▶️ 排队的任务开始了"))
                             runAgent(next, fromVoice = false)
                         }
+                    } else {
+                        returnToConversationAfterTask()
                     }
                 }
             }
         }.start()
+    }
+
+    /** 任务线程收尾统一回对话；用户主动切走后，也不把结果留在别的应用里。 */
+    private fun returnToConversationAfterTask() {
+        if (isFinishing || isDestroyed) return
+        val currentPackage = AssistantAccessibilityService.instance?.currentPackage()
+        if (currentPackage == packageName) return
+
+        android.util.Log.i("AIButler", "TASK finish return: from=$currentPackage")
+        val service = AssistantAccessibilityService.instance
+        if (service != null) {
+            service.returnToConversation(currentPackage, MainActivity::class.java)
+        } else {
+            runCatching {
+                startActivity(
+                    Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+            }.onFailure {
+                android.util.Log.w("AIButler", "TASK finish return failed", it)
+            }
+        }
     }
 
     /** 输入指令前检查权限：缺什么直接跳什么授权框，不只是提示文字 */
@@ -1263,6 +1603,167 @@ class MainActivity : AppCompatActivity() {
 
     private var pendingRun: String? = null
     private var projectionRequestActive = false
+
+    /** 恢复普通模式：把暂停时保存的 plan/history 还原，从当前步骤继续 */
+    private fun resumeNormalFrom(saved: PausedTask) {
+        while (history.size() > 0) history.remove(0)
+        for (e in saved.historySnapshot) history.add(e.deepCopy())
+        val plan = saved.plan
+        val currentStep = saved.currentStep
+        val launchedTarget = saved.launchedTarget
+
+        if (history.size() == 0 || history.get(0).asJsonObject.get("role")?.asString != "system") {
+            val fresh = JsonArray()
+            fresh.add(AgentEngine.systemPrompt(plan, currentStep).let { AgentEngine.msg("system", it) })
+            for (e in history) fresh.add(e)
+            while (history.size() > 0) history.remove(0)
+            for (e in fresh) history.add(e)
+        } else {
+            history.get(0).asJsonObject.addProperty("content", AgentEngine.systemPrompt(plan, currentStep))
+        }
+        history.add(AgentEngine.msg("user", "（用户说继续，请从上次暂停的地方接着做）"))
+
+        var round = 0
+        val MAX_ROUNDS = 40
+        while (true) {
+            round++
+            if (cancelRequested) break
+            if (round > MAX_ROUNDS) break
+            compactHistory()
+            Thread.sleep(200)
+            val res = try {
+                LlmClient.chatStream(
+                    Prefs.baseUrl(this), Prefs.apiKey(this), Prefs.model(this),
+                    sanitizeHistory(), AgentEngine.toolsJson(), Prefs.fastMode(this)
+                )
+            } catch (e: Exception) {
+                LlmClient.chat(
+                    Prefs.baseUrl(this), Prefs.apiKey(this), Prefs.model(this),
+                    sanitizeHistory(), AgentEngine.toolsJson(), Prefs.fastMode(this)
+                )
+            }
+            val cleanMsg = res.rawMessage.deepCopy()
+            cleanMsg.remove("reasoning_content")
+            run {
+                val ce = cleanMsg.get("content")
+                val empty = ce == null || ce.isJsonNull || (ce.isJsonPrimitive && ce.asString.isBlank())
+                val hasCalls = (cleanMsg.getAsJsonArray("tool_calls")?.size() ?: 0) > 0
+                if (empty && !hasCalls) cleanMsg.addProperty("content", "（好）")
+            }
+            history.add(cleanMsg)
+            if (res.toolCalls.isEmpty()) {
+                val reply = stripThinkTags(res.content).ifBlank { "任务已完成" }
+                runOnUiThread {
+                    adapter.add(ChatAdapter.Msg("assistant", reply))
+                    rv.scrollToPosition(adapter.items.size - 1)
+                }
+                break
+            }
+            for (call in res.toolCalls) {
+                if (cancelRequested) break
+                val result = AgentEngine.execute(this@MainActivity, call.name, call.arguments, launchedTarget?.second)
+                runOnUiThread {
+                    adapter.add(ChatAdapter.Msg("system", result.take(300)))
+                    rv.scrollToPosition(adapter.items.size - 1)
+                }
+                history.add(AgentEngine.toolMsg(call.id, result.take(4500)))
+            }
+            if (cancelRequested) break
+        }
+        if (cancelRequested) {
+            pausedTask = saved.copy(historySnapshot = history.deepCopy())
+            runOnUiThread {
+                adapter.add(ChatAdapter.Msg("system", "⏸️ 又暂停了。说「继续」接着做"))
+                rv.scrollToPosition(adapter.items.size - 1)
+            }
+        }
+    }
+
+    /** 恢复 AutoGLM：把暂停时的 ctx 还原，从刚才的轮次继续 */
+    private fun resumeAutoGLMFrom(saved: PausedTask) {
+        val ctx = saved.aglmCtx!!.deepCopy()
+        ctx.add(JsonObject().apply {
+            addProperty("role", "user")
+            addProperty("content", "（用户说继续，请从上次暂停的地方接着做）")
+        })
+        var finalReply: String? = null
+        var round = 0
+        while (finalReply == null && !cancelRequested) {
+            round++
+            if (round >= 40) { finalReply = "恢复后达到轮次上限，自动停止"; break }
+            while (ctx.size() > 10 && ctx.size() >= 4) { ctx.remove(2); ctx.remove(2) }
+            val shot = AgentEngine.screenB64(this, AgentEngine.VISION_MAX_W)
+            if (shot == null) { Thread.sleep(2000); continue }
+            val messages = JsonArray()
+            for (e in ctx) messages.add(e.deepCopy())
+            messages.add(JsonObject().apply {
+                addProperty("role", "user")
+                add("content", JsonArray().apply {
+                    add(JsonObject().apply {
+                        addProperty("type", "image_url")
+                        add("image_url", JsonObject().apply {
+                            addProperty("url", "data:image/jpeg;base64,${shot.get("b64").asString}")
+                        })
+                    })
+                    add(JsonObject().apply {
+                        addProperty("type", "text")
+                        addProperty("text", "当前屏幕截图。请继续完成任务：「${saved.userText.take(80)}」")
+                    })
+                })
+            })
+            val reply = try {
+                LlmClient.chatAutoGLM(Prefs.apiKey(this), messages)
+            } catch (e: Exception) {
+                finalReply = "恢复任务时出错：${e.message}"; break
+            }
+            ctx.add(JsonObject().apply { addProperty("role", "assistant"); addProperty("content", reply.content) })
+            val actions = AgentEngine.parseAutoGlmActions(reply.content)
+            if (actions.isEmpty()) {
+                finalReply = reply.content.ifBlank { "任务完成" }
+                break
+            }
+            for (action in actions) {
+                if (cancelRequested) break
+                execSingleAglmAction(action, ctx)
+                Thread.sleep(800)
+            }
+        }
+        if (cancelRequested) {
+            pausedTask = saved.copy(aglmCtx = ctx)
+            runOnUiThread {
+                adapter.add(ChatAdapter.Msg("system", "⏸️ 又暂停了。说「继续」接着做"))
+                rv.scrollToPosition(adapter.items.size - 1)
+            }
+        } else if (finalReply != null) {
+            runOnUiThread {
+                adapter.add(ChatAdapter.Msg("assistant", finalReply!!))
+                rv.scrollToPosition(adapter.items.size - 1)
+            }
+        }
+    }
+
+    private fun execSingleAglmAction(action: String, ctx: JsonArray) {
+        val svc = AssistantAccessibilityService.instance ?: return
+        val (w, h) = svc.realScreenSize()
+        fun norm(v: Int, total: Int) = ((v.coerceIn(0, 999) / 999.0) * total).toFloat()
+        fun str(k: String) = Regex("$k=\"((?:[^\"\\\\]|\\\\.)*)\"").find(action)?.groupValues?.get(1) ?: ""
+        fun pt(k: String) = Regex("$k=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(action)?.let {
+            norm(it.groupValues[1].toInt(), w) to norm(it.groupValues[2].toInt(), h)
+        }
+        when {
+            action.startsWith("Tap") || action.startsWith("Click") -> pt("point")?.let { (x, y) ->
+                svc.tap(x, y)
+            }
+            action.startsWith("Swipe") -> {
+                val p1 = pt("start"); val p2 = pt("end")
+                if (p1 != null && p2 != null) svc.swipePts(p1.first, p1.second, p2.first, p2.second)
+            }
+            action.startsWith("Type") || action.startsWith("Input") -> svc.inputText(str("text"))
+            action.startsWith("Back") -> svc.pressBack()
+            action.startsWith("Home") -> svc.home()
+            action.startsWith("Wait") -> Thread.sleep(2000)
+        }
+    }
 
     /** AutoGLM-Phone 专用脑模式：截图→模型出动作→本机执行（协议与 Open-AutoGLM 一致） */
     private fun runAutoGLMLoop(userText: String, contextUserText: String) {
@@ -1554,6 +2055,50 @@ class MainActivity : AppCompatActivity() {
                     finalReply = "该应用受系统隐私保护，视觉脑无法读取屏幕内容。请手动操作该应用，或在系统设置中关闭隐私遮挡。"
                     break
                 }
+                val compactGuardDump = screenDump.replace(Regex("\\s+"), "")
+                if (PageGuard.isUnintendedLiveRoom(userText, compactGuardDump)) {
+                    val exitLabel = PageGuard.liveRoomExitLabel(screenDump)
+                    val exited = when {
+                        exitLabel != null ->
+                            AssistantAccessibilityService.instance?.clickText(exitLabel)?.startsWith("已") == true
+                        else -> AssistantAccessibilityService.instance?.pressBack() == true
+                    }
+                    android.util.Log.i("AIButler", "AGLM force exit live room, label=$exitLabel, exited=$exited")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "🎯 识别到误入直播间，已优先点击明确的离开控件/返回。"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    ctx.add(JsonObject().apply {
+                        addProperty(
+                            "role", "user",
+                        )
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：刚才误入了直播间。这不是金币广告任务页；已优先点击“退出直播间/离开直播间”或系统返回。" +
+                                "下一轮重新读屏，不要点击直播间卡片、商品卡、主播头像、礼物或关注按钮。"
+                        )
+                    })
+                    Thread.sleep(1500)
+                    continue
+                }
+                if (PageGuard.isForbiddenPayment(userText, compactGuardDump)) {
+                    AssistantAccessibilityService.instance?.pressBack()
+                    android.util.Log.i("AIButler", "AGLM force back from payment/order page")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "🛑 已离开误入的支付/确认页，未点击任何付款控件。"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    ctx.add(JsonObject().apply {
+                        addProperty("role", "user")
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：刚才误入了商品确认/支付/充值页，系统只按了返回键，绝不能点支付、充值或订单按钮。" +
+                                "下一轮回到目标应用后继续找与「$userText」直接相关的免费入口。"
+                        )
+                    })
+                    Thread.sleep(1500)
+                    continue
+                }
                 // 页面文本指纹：本轮和上轮完全一致 = 冻结页（假倒计时/广告墙，等待无效）
                 val dumpSigNow = AgentEngine.fingerprint(screenDump).hashCode().toString()
                 val prevRoundDumpSig = lastDumpSig
@@ -1562,7 +2107,7 @@ class MainActivity : AppCompatActivity() {
                 val commerceTaskPage = Regex(
                     "加入购物车|购买数量|立即抢购|立即购买|去支付|提交订单|确认订单",
                     RegexOption.IGNORE_CASE
-                ).containsMatchIn(screenDump.replace(Regex("\\s+"), ""))
+                ).containsMatchIn(compactGuardDump)
                 if (commerceTaskPage && !Regex("下单|购买|支付|抢购|购物车").containsMatchIn(userText)) {
                     android.util.Log.i("AIButler", "AGLM force back from commerce task page")
                     AssistantAccessibilityService.instance?.pressBack()
@@ -1651,17 +2196,34 @@ class MainActivity : AppCompatActivity() {
                     appPkg != targetAppPackage && !appPkg.startsWith("com.aibutler")
                 ) {
                     // 被拉出目标App：如果刚点过任务卡，这就是一张「外跳广告卡」，记入任务卡记忆
+                    val trapLabel = if (lastCardLabel.isNotBlank() && round - lastCardRound <= 6) {
+                        lastCardLabel
+                    } else lastTapLabel
                     if (lastCardLabel.isNotBlank() && round - lastCardRound <= 6) {
                         TaskCardMemory.mark(this, targetAppPackage ?: lastCardPkg, lastCardLabel, good = false)
                     }
                     lastCardLabel = ""
                     wrongAppReturns++
-                    if (wrongAppReturns <= 2) {
-                        AssistantAccessibilityService.instance?.pressBack()
+                    val recovery = if (!unguidedMode) {
+                        attemptExitRecovery(targetAppPackage, guessedApp?.first ?: "", trapLabel)
+                    } else {
+                        ExitRecoveryResult(false, emptyList(), "未确定目标应用，先按返回兜底")
+                    }
+                    if (recovery.recovered) {
                         runOnUiThread {
-                            adapter.add(ChatAdapter.Msg("system", "🛑 已离开目标应用，正在返回。"))
+                            adapter.add(ChatAdapter.Msg("system", "↩️ ${recovery.detail}，继续任务。"))
                             rv.scrollToPosition(adapter.items.size - 1)
                         }
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "🛑 系统提示：刚才的入口曾把页面拉出目标应用，系统已通过通用退出路线回到目标应用。" +
+                                    "不要再点同一入口；重新读屏后换与「$userText」直接相关的原生入口。"
+                            )
+                        })
+                        Thread.sleep(1000)
+                        continue
                     } else {
                         if (wrongAppCycles >= 2) {
                             android.util.Log.i("AIButler", "AGLM wrongApp cycles exceeded, stopping")
@@ -1669,19 +2231,23 @@ class MainActivity : AppCompatActivity() {
                             break
                         }
                         wrongAppCycles++
-                        // 广告深链会把人拉进第三方App，在对方App里按返回是退不出去的，直接重新拉起目标应用
-                        android.util.Log.i("AIButler", "AGLM wrongApp back x$wrongAppReturns failed, relaunching target #$wrongAppCycles")
+                        // 通用兜底：通用按钮路线和返回都没回到目标应用时，不再在第三方页面继续探索
+                        android.util.Log.i(
+                            "AIButler",
+                            "AGLM wrongApp recovery failed x$wrongAppReturns, relaunching target #$wrongAppCycles detail=${recovery.detail}"
+                        )
                         DeviceTools.openApp(this, guessedApp?.first ?: "")
                         runOnUiThread {
                             adapter.add(ChatAdapter.Msg("system", "🚀 返回无效，已直接重新打开目标应用。"))
                             rv.scrollToPosition(adapter.items.size - 1)
                         }
-                        // 教会模型：刚才点的位置会跳出目标应用，别再点它
+                        // 教会模型：刚才点击的入口会跳出目标应用，别再点它
                         ctx.add(JsonObject().apply {
                             addProperty("role", "user")
                             addProperty(
                                 "content",
-                                "🛑 系统提示：你刚才点击的位置会跳出到无关第三方应用（已自动拉回${guessedApp?.first ?: "目标应用"}）。绝不要再点击那个位置或广告/下载/外跳入口。请回到目标应用内，继续寻找与「$userText」直接相关的原生入口。"
+                                "🛑 系统提示：你刚才点击的入口会跳出到无关第三方应用（通用退出尝试未成功，已重新拉回${guessedApp?.first ?: "目标应用"}）。" +
+                                    "绝不要再点击那个位置或广告/下载/外跳入口。请回到目标应用内，继续寻找与「$userText」直接相关的原生入口。"
                             )
                         })
                     }
@@ -1829,6 +2395,45 @@ class MainActivity : AppCompatActivity() {
                 val visibleThink = think.ifBlank {
                     val anchor = protocolMatch?.value ?: fallbackFinish?.value ?: fallbackAction?.value
                     if (anchor == null) "" else raw.substringBefore(anchor).trim()
+                }
+                val perceivedPageText = "$visibleThink\n$answer"
+                if (PageGuard.isRewardTask(userText) && answer.contains("Tap") &&
+                    PageGuard.isPaymentOrOrderPage(perceivedPageText) &&
+                    !PageGuard.isRejectedPaymentMention(perceivedPageText)
+                ) {
+                    answer = "do(action=\"Back\")"
+                    android.util.Log.i("AIButler", "AGLM blocked visually perceived payment tap")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "🛑 AI 视觉识别到支付/订单入口，已改为返回。"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    ctx.add(JsonObject().apply {
+                        addProperty("role", "user")
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：你刚要在视觉上识别出的支付/订单/充值控件上点击，已拦截并改为返回。" +
+                                "奖励任务禁止进入付费流程；请重新找免费金币入口。"
+                        )
+                    })
+                }
+                if (PageGuard.isRewardTask(userText) && answer.contains("Tap") &&
+                    Regex("直播间|正在直播|直播中|主播").containsMatchIn(perceivedPageText) &&
+                    PageGuard.liveRoomExitLabel(perceivedPageText) == null
+                ) {
+                    answer = "do(action=\"Back\")"
+                    android.util.Log.i("AIButler", "AGLM blocked visually perceived live-room tap")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "🎯 AI 视觉识别到误入直播间，已改为返回。"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    ctx.add(JsonObject().apply {
+                        addProperty("role", "user")
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：你准备点击直播间里的商品/主播/礼物区域，已拦截并改为返回。" +
+                                "金币任务不要停留在直播间；优先找“退出直播间/离开直播间”，再回任务页。"
+                        )
+                    })
                 }
                 val visionProgressHint = Regex(
                     "倒计时|再看\\s*\\d+|还需\\s*\\d+|\\d+\\s*秒后|计时|进度",
@@ -2198,7 +2803,27 @@ class MainActivity : AppCompatActivity() {
                     break
                 }
                 runOnUiThread {
-                    adapter.add(ChatAdapter.Msg("system", "🔧 " + answer.take(110) + "\n→ " + res.info.take(130)))
+                    val actionName = Regex("action=\"([^\"]+)\"").find(answer)
+                        ?.groupValues?.get(1)?.trim().orEmpty()
+                    val actionTitle = when {
+                        actionName.equals("Tap", true) -> "点击目标"
+                        actionName.equals("Swipe", true) -> "滑动屏幕"
+                        actionName.equals("Type", true) || actionName.equals("Type_Name", true) -> "输入内容"
+                        actionName.equals("Launch", true) -> "启动应用"
+                        actionName.equals("Wait", true) -> "等待页面"
+                        actionName.equals("Back", true) -> "返回上一页"
+                        actionName.isNotBlank() -> actionName
+                        else -> "执行动作"
+                    }
+                    val target = Regex("element=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer)
+                        ?.let { " · 目标(${it.groupValues[1]},${it.groupValues[2]})" }.orEmpty()
+                    val resultLine = res.info.lineSequence().firstOrNull { it.isNotBlank() } ?: "动作已发送"
+                    adapter.add(
+                        ChatAdapter.Msg(
+                            "system",
+                            "🎯 第${round}轮 · $actionTitle$target\n→ ${resultLine.take(130)}"
+                        )
+                    )
                     rv.scrollToPosition(adapter.items.size - 1)
                 }
                 ctx.add(JsonObject().apply {
@@ -2331,6 +2956,19 @@ class MainActivity : AppCompatActivity() {
             }
             if (cancelRequested) {
                 android.util.Log.i("AIButler", "AGENT 结束: 用户暂停(AutoGLM)")
+                pausedTask = PausedTask(
+                    mode = "autoglm",
+                    userText = userText,
+                    fromVoice = false,
+                    contextUserText = contextUserText,
+                    plan = null,
+                    currentStep = 1,
+                    launchedTarget = guessedApp,
+                    aglmCtx = ctx.deepCopy(),
+                    aglmGuessedApp = guessedApp,
+                    aglmRelatedMemory = relatedMemory,
+                    historySnapshot = history.deepCopy()
+                )
                 runOnUiThread {
                     adapter.add(ChatAdapter.Msg("system", "⏸️ 已暂停。想继续就说「继续」，想改主意直接说新的指令。"))
                     rv.scrollToPosition(adapter.items.size - 1)
@@ -2399,20 +3037,6 @@ class MainActivity : AppCompatActivity() {
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
                 }
-                // 收尾：任务结束后如果手机还停在第三方App（广告外跳残留），拉回AI小助手界面，
-                // 别把用户丢在美团/京东里对着黑屏发呆
-                run {
-                    val curPkg = AssistantAccessibilityService.instance?.currentPackage()
-                    if (curPkg != null && !curPkg.startsWith("com.aibutler") &&
-                        curPkg != "com.android.launcher" && curPkg != "unknown"
-                    ) {
-                        android.util.Log.i("AIButler", "AGLM 收尾：任务结束于 $curPkg，拉回AI小助手界面")
-                        startActivity(
-                            Intent(this, MainActivity::class.java)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        )
-                    }
-                }
             }
         } catch (e: Exception) {
             android.util.Log.e("AIButler", "AGLM 异常 class=${e.javaClass.name} message=${e.message}", e)
@@ -2421,6 +3045,30 @@ class MainActivity : AppCompatActivity() {
                 rv.scrollToPosition(adapter.items.size - 1)
             }
         }
+    }
+
+    /**
+     * 通用任务启动：先用显式应用名匹配真实启动器，失败再从真实安装列表做语义路由。
+     * 所有任务共用；具体应用、页面和后续步骤不写死。
+     */
+    private fun launchTargetAppForTask(userText: String, contextUserText: String): Pair<String, String>? {
+        val target = DeviceTools.guessApp(this, userText, contextUserText)
+            ?: inferTargetApp(userText, contextUserText)
+        if (target == null) {
+            android.util.Log.i("AIButler", "TARGET launch skipped: no installed app matched task=$userText")
+            return null
+        }
+        runOnUiThread {
+            adapter.add(ChatAdapter.Msg("system", "🚀 正在进入目标应用：${target.first}"))
+            rv.scrollToPosition(adapter.items.size - 1)
+        }
+        val launchResult = if (AgentEngine.shouldColdStart(userText)) {
+            DeviceTools.openAppFresh(this, target.second)
+        } else {
+            DeviceTools.openApp(this, target.first)
+        }
+        android.util.Log.i("AIButler", "TARGET launched=${target.first}|${target.second} result=$launchResult")
+        return target
     }
 
     /**
@@ -2506,6 +3154,100 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.w("AIButler", "AGLM app routing failed", e)
             null
         }
+    }
+
+    /**
+     * 误入第三方应用后的通用退出恢复：先回放已验证按钮路线，再按当前读屏结果
+     * 尝试“放弃/退出/关闭/返回”类控件。只有真实回到目标应用才写入记忆。
+     */
+    private fun attemptExitRecovery(
+        targetPackage: String?,
+        targetAppName: String,
+        trapLabel: String
+    ): ExitRecoveryResult {
+        val svc = AssistantAccessibilityService.instance
+            ?: return ExitRecoveryResult(false, emptyList(), "无障碍服务不可用")
+        val wrongPackage = svc.currentPackage()
+        if (targetPackage.isNullOrBlank()) {
+            return ExitRecoveryResult(false, emptyList(), "目标应用未知，不能安全尝试按钮退出")
+        }
+        if (wrongPackage == targetPackage) {
+            return ExitRecoveryResult(true, emptyList(), "已在目标应用")
+        }
+
+        val remembered = ExitMemory.routeFor(this, targetPackage, wrongPackage, trapLabel)
+        val actions = ArrayList<String>()
+
+        fun reachedTarget(): Boolean = svc.currentPackage() == targetPackage
+        fun settle(action: String) {
+            AgentEngine.waitForActionSettle(if (action == "Back") "Back" else "Tap", null)
+        }
+
+        // 记忆路线可能包含 Back。按钮文字变化时 clickText 自然失败，后面会用新读屏重新找。
+        for (action in remembered) {
+            val sent = if (action == "Back") svc.pressBack() == true
+            else svc.clickText(action).startsWith("已")
+            if (!sent) continue
+            actions.add(action)
+            settle(action)
+            if (reachedTarget()) {
+                ExitMemory.markSuccess(this, targetPackage, wrongPackage, trapLabel, actions)
+                return ExitRecoveryResult(true, actions, "已按记忆路线回到${targetAppName.ifBlank { "目标应用" }}")
+            }
+        }
+
+        var currentDump = svc.dumpScreenForAutoGLM()
+        var currentSig = AgentEngine.fingerprint(currentDump)
+        val attempted = remembered.map(ExitMemory::normalizeButton).toMutableSet()
+        var pageChanges = 0
+
+        // 每次只点一个候选并确认结果。页面变了就重新读屏；同一页上失败过的按钮不再重复点。
+        while (!reachedTarget() && actions.size < 5 && pageChanges < 3) {
+            val candidates = ExitMemory.orderedCandidates(currentDump, remembered + actions)
+            val candidate = candidates.firstOrNull {
+                it.score > 0 && it.normalized !in attempted
+            } ?: break
+            attempted.add(candidate.normalized)
+            actions.add(candidate.label)
+            val sent = svc.clickText(candidate.label).startsWith("已")
+            settle("Tap")
+            if (!sent) {
+                actions.removeAt(actions.lastIndex)
+                continue
+            }
+            if (reachedTarget()) {
+                ExitMemory.markSuccess(this, targetPackage, wrongPackage, trapLabel, actions)
+                return ExitRecoveryResult(true, actions, "已通过「${candidate.label}」回到${targetAppName.ifBlank { "目标应用" }}")
+            }
+
+            val nextDump = svc.dumpScreenForAutoGLM()
+            val nextSig = AgentEngine.fingerprint(nextDump)
+            if (nextSig != currentSig) {
+                currentDump = nextDump
+                currentSig = nextSig
+                pageChanges++
+            }
+        }
+
+        if (reachedTarget()) {
+            ExitMemory.markSuccess(this, targetPackage, wrongPackage, trapLabel, actions)
+            return ExitRecoveryResult(true, actions, "已回到${targetAppName.ifBlank { "目标应用" }}")
+        }
+
+        val backSent = svc.pressBack() == true
+        if (backSent) {
+            actions.add("Back")
+            settle("Back")
+            if (reachedTarget()) {
+                ExitMemory.markSuccess(this, targetPackage, wrongPackage, trapLabel, actions)
+                return ExitRecoveryResult(true, actions, "退出按钮无效，按返回键回到${targetAppName.ifBlank { "目标应用" }}")
+            }
+        }
+
+        if (remembered.isNotEmpty()) {
+            ExitMemory.markFailure(this, targetPackage, wrongPackage, trapLabel)
+        }
+        return ExitRecoveryResult(false, actions, "屏幕上的退出候选没有带回目标应用")
     }
 
     private fun saveVisionFrame(round: Int, b64: String): File? {
@@ -2659,43 +3401,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 历史压缩：超过上限时裁剪旧消息，保留系统提示和最近的完整对话轮次；
-     *  并把较早的读屏/视觉结果（每条可达数千字）替换为占位摘要，避免每轮请求体越滚越大 */
+    /** 历史压缩：按字符预算裁剪，第一条用户消息（原始指令）永远保留 */
     private fun compactHistory(maxMessages: Int = 14, keepFullTools: Int = 6) {
-        if (history.size() <= maxMessages) {
-            summarizeOldToolResults(keepFullTools)
-            return
-        }
-        val keep = JsonArray()
-        keep.add(history.get(0))
-        var start = history.size() - (maxMessages - 1)
-        if (start < 1) start = 1
-        while (start < history.size()) {
-            val role = history.get(start).asJsonObject.get("role")?.asString
-            if (role == "assistant") break
-            start++
-        }
-        if (start >= history.size()) return
-        for (i in start until history.size()) keep.add(history.get(i))
-        while (history.size() > 0) history.remove(0)
-        for (e in keep) history.add(e)
-        summarizeOldToolResults(keepFullTools)
-    }
-
-    /** 从最新往前保留 keepFullTools 条工具结果完整，更早的长结果替换为占位摘要 */
-    private fun summarizeOldToolResults(keepFullTools: Int) {
-        var toolSeen = 0
-        for (i in history.size() - 1 downTo 1) {
-            val o = history.get(i).asJsonObject
-            if (o.get("role")?.asString != "tool") continue
-            toolSeen++
-            if (toolSeen <= keepFullTools) continue
-            val c = o.get("content") ?: continue
-            if (c.isJsonNull || !c.isJsonPrimitive) continue
-            val text = c.asString
-            if (text.length > 400) {
-                o.addProperty("content", "[旧读屏/工具结果已省略，需要时重新调用 get_screen_state] " + text.take(80))
-            }
+        val compressed = ContextCompressor.compress(history)
+        if (compressed.size() != history.size()) {
+            while (history.size() > 0) history.remove(0)
+            for (e in compressed) history.add(e)
         }
     }
 

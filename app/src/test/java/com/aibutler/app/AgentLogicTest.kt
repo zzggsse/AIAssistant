@@ -96,6 +96,71 @@ class AgentLogicTest {
     }
 
     @Test
+    fun autoGlmPrompt_任务开始允许启动目标应用_执行中禁止误跳转() {
+        val sp = AgentEngine.autoGlmSystemPrompt()
+        assertTrue("缺少任务开始时启动目标应用的约定", sp.contains("任务开始时允许并应当 Launch"))
+        assertTrue("缺少执行中防误跳转的约定", sp.contains("点击前判断入口是否可能离开目标应用"))
+    }
+
+    @Test
+    fun 通用启动守卫_只允许任务开始时确定的目标包() {
+        assertTrue(TaskAppGuard.isAllowed("com.tencent.mm", "com.tencent.mm"))
+        assertFalse(TaskAppGuard.isAllowed("com.taobao.taobao", "com.tencent.mm"))
+        assertTrue("目标未知时允许模型先选择应用", TaskAppGuard.isAllowed("com.taobao.taobao", null))
+    }
+
+    @Test
+    fun 单步闹钟本地路由_中文八点() {
+        assertEquals(
+            NativeTaskRouter.AlarmRequest(8, 0),
+            NativeTaskRouter.parseAlarmRequest("帮我设一个八点钟的闹钟")
+        )
+    }
+
+    @Test
+    fun 单步闹钟本地路由_晚上九点与备注() {
+        assertEquals(
+            NativeTaskRouter.AlarmRequest(21, 0, "吃药"),
+            NativeTaskRouter.parseAlarmRequest("帮我设个晚上9点的闹钟，备注吃药")
+        )
+    }
+
+    @Test
+    fun 单步闹钟本地路由_查询取消和组合任务不吞掉() {
+        assertNull(NativeTaskRouter.parseAlarmRequest("查看明天八点的闹钟"))
+        assertNull(NativeTaskRouter.parseAlarmRequest("帮我取消八点的闹钟"))
+        assertNull(NativeTaskRouter.parseAlarmRequest("帮我设八点的闹钟然后发消息给小王"))
+    }
+
+    @Test
+    fun 单步便签本地路由_支持写入和输入说法() {
+        assertEquals(
+            NativeTaskRouter.NoteRequest("abcd", "abcd"),
+            NativeTaskRouter.parseNoteRequest("去便签写入abcd")
+        )
+        assertEquals(
+            NativeTaskRouter.NoteRequest("买牛奶", "买牛奶"),
+            NativeTaskRouter.parseNoteRequest("在便签里输入买牛奶")
+        )
+    }
+
+    @Test
+    fun 单步便签本地路由_查询和组合不吞掉() {
+        assertNull(NativeTaskRouter.parseNoteRequest("查看便签"))
+        assertNull(NativeTaskRouter.parseNoteRequest("删除便签abcd"))
+        assertNull(NativeTaskRouter.parseNoteRequest("便签写入abcd然后发消息"))
+    }
+
+    @Test
+    fun 闹钟工具明确会打开时钟应用() {
+        val tools = AgentEngine.toolsJson()
+        val alarm = tools.map { it.asJsonObject }
+            .first { it.getAsJsonObject("function").get("name").asString == "set_alarm" }
+            .getAsJsonObject("function")
+        assertTrue(alarm.get("description").asString.contains("打开系统时钟应用"))
+    }
+
+    @Test
     fun plannerPrompt_包含用户指令与格式要求() {
         val p = AgentEngine.plannerPrompt("帮我刷金币", "历史上下文")
         assertTrue(p.contains("帮我刷金币"))
@@ -270,6 +335,15 @@ class AgentLogicTest {
     }
 
     @Test
+    fun tap_金币任务不误点直播引流卡() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 任务中心 看直播领金币\n" +
+            "可点击: 看直播领金币 [500,300]"
+        val r = exec("do(action=\"Tap\", element=[500,300])", task = "看广告刷金币", dump = dump)
+        assertEquals("__JUMP_BLOCK__", r.message)
+    }
+
+    @Test
     fun wait_解析秒数并执行() {
         val r = exec("do(action=\"Wait\", duration=\"1 seconds\")")
         assertEquals("已等待1秒", r.info)
@@ -414,6 +488,90 @@ class AgentLogicTest {
         assertEquals("美团酒店优惠进行中", TaskCardMemory.matchLabel(setOf("美团酒店优惠进行中"), "美团酒店优惠"))
         assertEquals("去观看", TaskCardMemory.matchLabel(setOf("去观看"), "去观看得金币"))
         assertNull(TaskCardMemory.matchLabel(setOf("完全无关"), "去观看得金币"))
+    }
+
+    // ========== ExitMemory：通用外跳退出记忆 ==========
+
+    @Test
+    fun 退出记忆_按语义提取按钮并排除继续观看() {
+        val dump = "当前应用: com.any.third.party\n" +
+            "页面内容: 看完广告可得奖励\n" +
+            "可点击: 继续观看得奖励 {btn_continue,TextView} [500,700]\n" +
+            "可点击: 立即下载 {btn_download,TextView} [500,820]\n" +
+            "可点击: 放弃奖励 {btn_give_up,TextView} [220,720]\n" +
+            "可点击: 关闭 5s {btn_close,ImageView} [940,80]"
+        val labels = ExitMemory.visibleButtons(dump).map { it.normalized }
+
+        assertTrue("放弃奖励应作为通用退出候选", "放弃奖励" in labels)
+        assertTrue("关闭应作为通用退出候选", labels.any { it.contains("关闭") })
+        assertFalse("继续观看不是退出控件", labels.any { it.contains("继续观看") })
+        assertFalse("下载按钮不能当作退出控件", labels.any { it.contains("下载") })
+    }
+
+    @Test
+    fun 退出记忆_验证路线排在普通候选前() {
+        val dump = "当前应用: com.any.third.party\n" +
+            "可点击: 关闭 {btn_close,ImageView} [940,80]\n" +
+            "可点击: 放弃奖励 {btn_give_up,TextView} [220,720]"
+        val ordered = ExitMemory.orderedCandidates(
+            dump,
+            remembered = listOf("放弃奖励")
+        ).map { it.normalized }
+
+        assertEquals("放弃奖励", ordered.first())
+        assertTrue(ordered.any { it.contains("关闭") })
+    }
+
+    @Test
+    fun 退出记忆_存储键剥离倒计时和奖励数字() {
+        val first = ExitMemory.storageKey(
+            "com.target.app", "com.any.third.party", "点击并浏览15秒领88金币"
+        )
+        val second = ExitMemory.storageKey(
+            "com.target.app", "com.any.third.party", "点击并浏览30秒领66金币"
+        )
+        assertEquals(first, second)
+    }
+
+    @Test
+    fun 页面防护_识别误入直播间并优先明确退出() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 官方旗舰店 1274观看 直播回放\n" +
+            "可点击: 开启通知 [500,510]\n" +
+            "可点击: 退出直播间 [500,585]\n" +
+            "可点击: 说点什么... [240,850]"
+
+        assertTrue(PageGuard.isLiveRoom(dump))
+        assertTrue(PageGuard.isUnintendedLiveRoom("看广告刷金币", dump))
+        assertEquals("退出直播间", PageGuard.liveRoomExitLabel(dump))
+    }
+
+    @Test
+    fun 页面防护_金币任务进入支付页必须拦截() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: éLL旗舰店 补贴价79.9 支付宝支付 微信支付 立即支付\n"
+
+        assertTrue(PageGuard.isPaymentOrOrderPage(dump))
+        assertTrue(PageGuard.isForbiddenPayment("看广告刷金币", dump))
+        assertFalse(PageGuard.isForbiddenPayment("帮我下单购买", dump))
+    }
+
+    @Test
+    fun 页面防护_否定支付描述不触发视觉拦截() {
+        assertTrue(
+            PageGuard.isRejectedPaymentMention(
+                "这不是支付页，我要点击免费领取金币。do(action=\"Tap\", element=[500,300])"
+            )
+        )
+        assertFalse(PageGuard.isRejectedPaymentMention("当前是支付页，请点击立即支付"))
+    }
+
+    @Test
+    fun 页面防护_通用奖励卡只拦高风险语义() {
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "看直播领金币"))
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "下载APP得奖励"))
+        assertFalse(PageGuard.isUnsafeRewardTap("看广告刷金币", "观看广告领金币"))
+        assertFalse(PageGuard.isUnsafeRewardTap("看直播领金币", "进入直播间"))
     }
 
     // ========== protocolRetryNote：协议违规纠正提示（真机协议复读问题回归） ==========

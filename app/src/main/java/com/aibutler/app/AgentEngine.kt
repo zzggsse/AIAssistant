@@ -227,14 +227,29 @@ object AgentEngine {
         t("press_back", "按返回键")
         t("wait_seconds", "等待一段时间：等加载、倒计时、播放或结果刷新时用它",
             obj("seconds" to prop("integer", "等待秒数，1到60")), listOf("seconds"))
-        t("scroll_screen", "滑动屏幕",
-            obj("direction" to prop("string", "down=往下滑看更多, up=往上滑")), listOf("direction"))
+        t("scroll_screen", "滑动屏幕（支持四个方向）",
+            obj("direction" to prop("string", "down=往下滑看更多, up=往上滑, left=往左滑（下一个Tab/下一张图）, right=往右滑（上一个Tab/上一张图）")), listOf("direction"))
         t("go_home", "回到手机桌面")
-        t("set_alarm", "设置系统闹钟",
+        t("set_alarm", "设置系统闹钟，并打开系统时钟应用显示结果",
             obj("hour" to prop("integer", "小时(24小时制)"),
                 "minute" to prop("integer", "分钟"),
                 "label" to prop("string", "闹钟备注，可不填")),
             listOf("hour", "minute"))
+        t("cancel_alarm", "取消闹钟（会打开闹钟列表让用户手动删除，因为系统不允许第三方直接删除）",
+            obj("hour" to prop("integer", "要取消的闹钟小时(24小时制)，可不填"),
+                "minute" to prop("integer", "要取消的闹钟分钟，可不填"),
+                "label" to prop("string", "要取消的闹钟备注关键词，可不填")))
+        t("find_contact", "在手机通讯录里查找联系人，返回姓名和电话号码",
+            obj("keyword" to prop("string", "联系人姓名或关键词")), listOf("keyword"))
+        t("create_calendar_event", "创建日历日程",
+            obj("title" to prop("string", "日程标题"),
+                "start_time" to prop("string", "开始时间，格式 yyyy-MM-dd HH:mm"),
+                "end_time" to prop("string", "结束时间，格式 yyyy-MM-dd HH:mm，可不填则默认1小时"),
+                "description" to prop("string", "日程描述，可不填")),
+            listOf("title", "start_time"))
+        t("copy_to_clipboard", "把一段文字复制到剪贴板",
+            obj("text" to prop("string", "要复制的内容")), listOf("text"))
+        t("read_clipboard", "读取剪贴板当前的内容")
         t("send_sms", "给联系人发短信（会打开短信应用让用户确认发送）",
             obj("contact" to prop("string", "联系人名字或手机号"),
                 "message" to prop("string", "短信内容")),
@@ -254,6 +269,14 @@ object AgentEngine {
             listOf("title", "content"))
         t("read_notes", "查看便签",
             obj("keyword" to prop("string", "关键词，可不填")))
+        t("update_note", "修改一条已有的便签",
+            obj("id" to prop("integer", "便签编号（read_notes 返回的 id=xxx）"),
+                "title" to prop("string", "新标题，留空则不改"),
+                "content" to prop("string", "新内容，留空则不改")),
+            listOf("id"))
+        t("delete_note", "删除一条便签",
+            obj("id" to prop("integer", "便签编号（read_notes 返回的 id=xxx）")),
+            listOf("id"))
         t("update_step", "完成计划中的一个步骤后必调。汇报该步骤状态，然后继续执行下一步。",
             obj(
                 "step" to prop("integer", "刚完成的步骤编号"),
@@ -261,17 +284,21 @@ object AgentEngine {
                 "note" to prop("string", "一句话说明结果或失败原因，可不填")
             ),
             listOf("step", "status"))
+        t("replan", "当前计划不可行、页面情况和预期严重不符、或所有已知路径都走不通时，调用此工具请求重新规划剩余步骤。",
+            obj("reason" to prop("string", "为什么需要重新规划，一句话")), listOf("reason"))
 
         cachedTools = tools
         return tools
     }
 
-    fun systemPrompt(plan: TaskPlan? = null, currentStep: Int = 1, experience: String = ""): String {
+    fun systemPrompt(plan: TaskPlan? = null, currentStep: Int = 1, experience: String = "", nativeToolFirst: Boolean = false): String {
         val now = SimpleDateFormat("yyyy-MM-dd EEEE HH:mm", Locale.CHINA).format(Date())
         val planText = planSection(plan, currentStep)
         val expSection = if (experience.isNotBlank()) "\n【相关历史经验（优先按经验走老路，页面变化时必须重新读屏确认）】\n$experience\n" else ""
+        val nativeFirstSection = if (nativeToolFirst) "\n【原生工具优先】这条指令命中了原生工具（如 create_note、set_alarm、send_sms 等）。直接调用对应的原生工具完成，不要走屏幕操作流程。\n" else ""
         return """
             你是运行在用户安卓手机里的智能助理，能直接替用户操作手机。当前时间：$now。设备：${Build.MANUFACTURER} ${Build.MODEL}。
+            $nativeFirstSection
 
             【执行框架】每个任务按这四步走：
             1. 分类：这是纯聊天/知识问答（直接回答，不用工具），还是要操作手机的任务？
@@ -366,7 +393,7 @@ object AgentEngine {
             "- do(action=\"Take_over\", message=\"xxx\")  登录/验证码等需要用户协助时触发。\n" +
             "- finish(message=\"xxx\")  结束任务，message是给用户的结果说明。\n\n" +
             "必须遵循的规则：\n" +
-            "1. 第一轮先从任务推断目标应用和粗略路径（最多3-6步），不要问用户；当前页面不是目标应用时先 Launch，目标不明确时优先从桌面找官方应用。\n" +
+            "1. 第一轮先从任务推断目标应用和粗略路径（最多3-6步），不要问用户；任务开始时允许并应当 Launch 与任务直接相关的目标应用，这是正常导航。进入目标应用后，才按第7条严格防止误跳转；目标不明确时优先从桌面找官方应用。\n" +
             "2. 默认每次点击、输入、滑动、返回后都会进入下一轮；必须把下一轮截图/页面内容当作新页面重新观察，不能沿用旧坐标或旧结论（同页批量例外见第17条）。『当前应用/页面内容/关键元素』是系统实时读取的权威状态；如果它和截图看起来冲突，以实时读取为准，必要时 Wait 后重新观察。\n" +
             "3. 优先点击文字、图标说明或页面概要中明确匹配目标的可点击元素；无文字按钮要结合截图位置判断。\n" +
             "4. 输入前先点击输入框，确认聚焦后 Type；需要确认/搜索/发送时，观察新页面再点击对应按钮。\n" +
@@ -393,6 +420,7 @@ object AgentEngine {
             "19.1 【广告内容免疫】广告页面和广告落地页上，除倒计时区域和关闭控件外的任何内容都绝不能点击：商品图、品牌文字（如美团/京东/拼多多）、下载按钮、「去完成任务/了解详情/立即抢购」类 CTA、推荐信息流，全都是广告主的引流陷阱，点了会被拉出目标应用、前功尽弃。广告结算/退出弹窗上要退出就找「放弃奖励/放弃/以后再说/我知道了/关闭」或 X；「继续观看」只在该你想补完倒计时领奖时才点。\n" +
             "19.2 【禁用旧坐标】页面切换后的每一轮截图都是新页面：绝不能沿用上一轮的点击坐标。每次 Tap 前必须在当前截图上重新找到目标的新位置。\n" +
             "20. 【刷视频≠做任务】用户说「刷视频/看视频/刷一会儿」指的是打开应用的正常视频信息流，直接上下滑动观看即可；极速版类应用的观看奖励会在普通刷视频时自动累积，不需要进任务中心。只有用户明确提到「看广告/去赚钱/做任务/签到」时才进入任务中心类页面；用户没提赚钱相关字眼时，不要主动点击任何金币、红包、宝箱、签到或任务入口。\n" +
+            "20.1 【开放任务永不停】用户说「刷视频/看视频/浏览/逛逛/刷内容」这类没有明确数量或时间目标的任务时：你绝对不能调用 finish，必须无限循环执行——Swipe 上滑一段视频 → Wait 2-3秒 → 继续 Swipe，一直重复。唯一的停止方式是：① 用户点了「停止任务」气泡；② 系统达到最大轮次自动终止。每轮 Swipe 后都算继续干活，不要在 think 里写「已完成」。\n" +
             "21. 【入口找不到的系统排查】当前页面确实没有目标入口时，按固定顺序排查，每个候选只尝试一次：① 底部导航各标签页，优先[我/我的]（赚钱/签到/钱包/金币类入口几乎总在这一页，钱包常在头像附近或右上角菜单里）；② 页面右上角悬挂图标（红包/金币/宝箱类挂件）；③ 首页活动弹窗里的活动入口。全部找不到就 finish 如实说明「该应用未找到目标入口及已尝试的位置」。绝不重复尝试已确认无效的位置，绝不在视频流里乱点猜坐标。\n"
     }
 
@@ -669,6 +697,17 @@ object AgentEngine {
                     RegexOption.IGNORE_CASE
                 )
                 val normalizedPage = screenDump.orEmpty().replace(Regex("\\s+"), "")
+                if (PageGuard.isUnintendedLiveRoom(userTask, normalizedPage)) {
+                    val exitLabel = PageGuard.liveRoomExitLabel(screenDump.orEmpty())
+                    val info = when {
+                        exitLabel != null && svc?.clickText(exitLabel)?.startsWith("已") == true ->
+                            "已点击「$exitLabel」退出直播间"
+                        svc?.pressBack() == true -> "已按返回退出直播间"
+                        else -> DeviceTools.NO_A11Y
+                    }
+                    android.util.Log.i("AIButler", "Blocked Tap in unintended live room: $exitLabel")
+                    return AglmResult(info, false)
+                }
                 val isCommercePage = Regex(
                     "立即抢购|立即购买|去支付|提交订单|确认订单|马上抢|单件包邮|拼单|加入购物车|购买数量|商品详情|已选.*规格",
                     RegexOption.IGNORE_CASE
@@ -686,17 +725,38 @@ object AgentEngine {
                 else if (!targetAppMatched && jumpPattern.containsMatchIn(nearbyLabel)) {
                     AglmResult("🛑 已拦截疑似跳转其他应用：${nearbyLabel.take(100)}", false, "__JUMP_BLOCK__")
                 }
+                else if (PageGuard.isUnsafeRewardTap(userTask, nearbyLabel)) {
+                    android.util.Log.i("AIButler", "Blocked unsafe reward tap: $nearbyLabel")
+                    AglmResult(
+                        "🛑 已拦截奖励任务里的高风险入口：${nearbyLabel.take(100)}",
+                        false,
+                        "__JUMP_BLOCK__"
+                    )
+                }
+                else if (PageGuard.isForbiddenPayment(userTask, normalizedPage)) {
+                    android.util.Log.i("AIButler", "Blocked Tap on payment/order page")
+                    AglmResult(
+                        "🛑 已拦截商品确认/支付页点击。当前页面疑似会花钱。",
+                        false,
+                        "__COMMERCE_BLOCK__"
+                    )
+                }
                 else if (Regex("同意并使用|同意全部|同意并继续|接受全部|同意.?cookie", RegexOption.IGNORE_CASE)
                     .containsMatchIn(nearbyLabel)
                 ) {
                     android.util.Log.i("AIButler", "Blocked Tap on privacy consent button: $nearbyLabel")
                     AglmResult("🛑 已拦截隐私条款同意按钮，需要用户自行确认是否同意。", false, "__PRIVACY_BLOCK__")
                 }
-                else AglmResult(
-                    if (svc?.tap(norm(corrected.first, realW).toFloat(), norm(corrected.second, realH).toFloat()) == true)
+                else {
+                    val targetX = norm(corrected.first, realW).toFloat()
+                    val targetY = norm(corrected.second, realH).toFloat()
+                    svc?.showActionPreview(targetX, targetY, nearbyLabel)
+                    AglmResult(
+                    if (svc?.tap(targetX, targetY) == true)
                         "已点击屏幕(${corrected.first},${corrected.second})" +
                             if (correctedLabel.isBlank()) "" else "→${correctedLabel}"
                     else DeviceTools.NO_A11Y, false)
+                    }
             }
             "Type", "Type_Name" -> {
                 val t = str("text") ?: ""
@@ -842,7 +902,10 @@ object AgentEngine {
             val distance = (candidate.second - modelPoint.first) * (candidate.second - modelPoint.first) +
                 (candidate.third - modelPoint.second) * (candidate.third - modelPoint.second)
             Triple(candidate, textScore(candidate.first), distance)
-        }.filter { it.second >= 40 && it.third <= 5000 }
+        }.filter { candidate ->
+            candidate.second >= 40 && candidate.third <= 5000 &&
+                !PageGuard.isUnsafeRewardTap(userTask, candidate.first.first)
+        }
         val target = scored.maxWithOrNull(compareBy({ it.second }, { -it.third }))?.first ?: return modelPoint!!
         android.util.Log.i("AIButler", "Tap corrected: model=${modelPoint.first},${modelPoint.second} " +
             "element=${target.first},${target.second} label=${target.first}")
@@ -942,6 +1005,13 @@ object AgentEngine {
             android.util.Log.i("AIButler", "confirmLaunch: app not installed locally: $appName")
             return false
         }
+        // 用户指令里明确提到目标 App 名时，不需要再问 LLM 确认，省 1-3 秒延迟
+        val normalizedName = appName.trim().lowercase().replace(Regex("\\s+"), "")
+        val normalizedTask = userTask.trim().lowercase().replace(Regex("\\s+"), "")
+        if (normalizedTask.contains(normalizedName) && normalizedName.length >= 2) {
+            android.util.Log.i("AIButler", "confirmLaunch: app name in user instruction, skip LLM: $appName")
+            return true
+        }
         allowedApp?.let { app ->
             val requested = appName.trim()
             return requested.equals(app.first, ignoreCase = true) ||
@@ -990,14 +1060,25 @@ object AgentEngine {
         return result
     }
 
-    /** 判断按钮文字是否涉及支付/验证等敏感操作（技术硬拦截；提交订单不拦截，AI可以点） */
+    /** 判断按钮文字是否涉及支付/验证等敏感操作（技术硬拦截；提交订单不拦截，AI可以点）。
+     *  中英文关键词都要覆盖，防止英文 App 的支付按钮漏过拦截。 */
     private fun isSensitiveButton(label: String): Boolean {
         if (label.isBlank()) return false
-        return Regex("确认支付|立即支付|去支付|确认付款|立即付款|支付|付款|转账|验证码|输入密码").containsMatchIn(label)
+        return Regex(
+            "确认支付|立即支付|去支付|确认付款|立即付款|支付|付款|转账|验证码|输入密码|" +
+            "(?i)pay\\s*now|make.{0,4}payment|checkout|confirm.{0,4}payment|" +
+            "(?i)enter.{0,4}password|proceed.{0,8}(?:pay|check.?out)|transfer\\s*(?:money|fund)?|" +
+            "(?i)verify.{0,4}code|one.?time.(?:pass.?word|code)|otp"
+        ).containsMatchIn(label)
     }
 
     /** 执行大模型要求的工具，返回给大模型看的结果文字 */
-    fun execute(a: Activity, name: String, argsJson: String): String = try {
+    fun execute(
+        a: Activity,
+        name: String,
+        argsJson: String,
+        allowedPackage: String? = null
+    ): String = try {
         val args = try { JsonParser.parseString(argsJson).asJsonObject } catch (e: Exception) { JsonObject() }
         fun s(k: String): String = args.get(k)?.takeIf { !it.isJsonNull }?.asString ?: ""
 
@@ -1005,7 +1086,14 @@ object AgentEngine {
         when (name) {
             "get_current_time" -> SimpleDateFormat("yyyy-MM-dd EEEE HH:mm:ss", Locale.CHINA).format(Date())
             "list_installed_apps" -> DeviceTools.listApps(a)
-            "open_app" -> DeviceTools.openApp(a, s("app_name"))
+            "open_app" -> {
+                val requested = DeviceTools.resolveApp(a, s("app_name"))
+                when {
+                    requested != null && !TaskAppGuard.isAllowed(requested.second, allowedPackage) ->
+                        "🛑 已拦截执行期切换到其他应用：${requested.first}。当前任务只允许停留在启动时确定的目标应用。"
+                    else -> DeviceTools.openApp(a, s("app_name"))
+                }
+            }
             "get_screen_state" -> {
                 val m = awakeMsg(a)
                 if (m != null) m else svc?.dumpScreen() ?: DeviceTools.NO_A11Y
@@ -1093,12 +1181,10 @@ object AgentEngine {
                 if (x == null || y == null) "x/y 参数无效"
                 else {
                     val nearby = svc?.labelAtPixel(x.toInt(), y.toInt()) ?: ""
-                    if (isSensitiveButton(nearby)) {
-                        "🛑 安全拦截：坐标($x,$y)附近元素「${nearby.take(40)}」涉及付款/下单/验证，已阻止自动点击。请告诉用户手动确认这一步。"
-                    } else if (svc?.tap(x, y) == true) {
-                        "已在坐标($x,$y)点击"
-                    } else {
-                        DeviceTools.NO_A11Y
+                    if (isSensitiveButton(nearby)) "🛑 安全拦截：坐标($x,$y)附近元素「${nearby.take(40)}」涉及付款/下单/验证，已阻止自动点击。请告诉用户手动确认这一步。"
+                    else {
+                        svc?.showActionPreview(x, y, nearby)
+                        if (svc?.tap(x, y) == true) "已在坐标($x,$y)点击" else DeviceTools.NO_A11Y
                     }
                 }
             }
@@ -1106,10 +1192,27 @@ object AgentEngine {
             "press_back" -> if (svc?.pressBack() == true) "已按返回键" else DeviceTools.NO_A11Y
             "wait_seconds" -> {
                 val sec = (s("seconds").toIntOrNull() ?: 5).coerceIn(1, 60)
-                Thread.sleep(sec * 1000L)
-                "已等待${sec}秒"
+                // 可中断等待：每 300ms 检查一次暂停请求，用户按停止时最多等 300ms 就能响应
+                var waited = 0L
+                val target = sec * 1000L
+                var interrupted = false
+                while (waited < target) {
+                    if (TaskControlBus.pauseRequested) { interrupted = true; break }
+                    val chunk = minOf(300L, target - waited)
+                    Thread.sleep(chunk)
+                    waited += chunk
+                }
+                if (interrupted) "已中断等待（用户叫停）" else "已等待${sec}秒"
             }
-            "scroll_screen" -> svc?.scroll(s("direction") != "up") ?: DeviceTools.NO_A11Y
+            "scroll_screen" -> {
+                val dir = s("direction").lowercase().trim()
+                when (dir) {
+                    "up" -> svc?.scroll(false) ?: DeviceTools.NO_A11Y
+                    "left" -> svc?.scrollHorizontal(false) ?: DeviceTools.NO_A11Y
+                    "right" -> svc?.scrollHorizontal(true) ?: DeviceTools.NO_A11Y
+                    else -> svc?.scroll(true) ?: DeviceTools.NO_A11Y
+                }
+            }
             "go_home" -> if (svc?.home() == true) "已回到桌面" else DeviceTools.NO_A11Y
             "set_alarm" -> {
                 val hour = s("hour").toIntOrNull()
@@ -1118,6 +1221,29 @@ object AgentEngine {
                     "hour/minute 参数无效（需要 hour 0-23、minute 0-59）。请把目标时间换算成 24 小时制后重试"
                 } else onUi(a) { DeviceTools.setAlarm(a, hour, minute, s("label")) }
             }
+            "cancel_alarm" -> onUi(a) {
+                DeviceTools.cancelAlarm(a, s("hour").toIntOrNull(), s("minute").toIntOrNull(), s("label"))
+            }
+            "find_contact" -> DeviceTools.findContact(a, s("keyword"))
+            "create_calendar_event" -> {
+                val title = s("title")
+                val startStr = s("start_time")
+                if (title.isBlank()) "title 不能为空"
+                else {
+                    val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA)
+                    val begin = try { fmt.parse(startStr)?.time } catch (_: Exception) { null }
+                    if (begin == null) "start_time 格式错误，需要 yyyy-MM-dd HH:mm，例如 2025-01-15 14:00"
+                    else {
+                        val endStr = s("end_time")
+                        val end = if (endStr.isNotBlank()) {
+                            try { fmt.parse(endStr)?.time } catch (_: Exception) { null }
+                        } else null
+                        onUi(a) { DeviceTools.createCalendarEvent(a, title, begin, end ?: (begin + 3600000L), s("description")) }
+                    }
+                }
+            }
+            "copy_to_clipboard" -> DeviceTools.copyToClipboard(a, s("text"))
+            "read_clipboard" -> DeviceTools.readClipboard(a)
             "send_sms" -> onUi(a) { DeviceTools.sendSms(a, s("contact"), s("message")) }
             "make_call" -> onUi(a) { DeviceTools.makeCall(a, s("contact")) }
             "open_url" -> onUi(a) { DeviceTools.openUrl(a, s("url")) }
@@ -1126,7 +1252,18 @@ object AgentEngine {
             "read_recent_notifications" -> DeviceTools.readNotifications(s("limit").toIntOrNull() ?: 15)
             "create_note" -> NotesStore.create(a, s("title"), s("content"))
             "read_notes" -> NotesStore.read(a, s("keyword"))
+            "update_note" -> {
+                val id = s("id").toLongOrNull()
+                if (id == null) "id 无效，请先 read_notes 确认编号"
+                else NotesStore.update(a, id, s("title"), s("content"))
+            }
+            "delete_note" -> {
+                val id = s("id").toLongOrNull()
+                if (id == null) "id 无效，请先 read_notes 确认编号"
+                else NotesStore.delete(a, id)
+            }
             "update_step" -> "已记录步骤${args.get("step")?.takeIf { !it.isJsonNull }?.asInt ?: "?"}状态：${s("status")}。继续执行下一步。"
+            "replan" -> "🔄 重新规划请求已发出（原因：${s("reason")}）。等待系统重新分配计划后继续执行。"
             else -> "未知工具：$name"
         }
     } catch (e: Exception) {
