@@ -13,6 +13,7 @@ import android.widget.FrameLayout
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -29,7 +30,7 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
     private val library = VisualFeatureLibrary(service)
     private var root: View? = null
     private var selected = -1
-    private var selectedRow: TextView? = null
+    private var selectedRow: View? = null
     private var screen: Bitmap? = null
     private var rects: List<Rect> = emptyList()
 
@@ -154,7 +155,10 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
                         if (index >= 0) {
                             showPicker(preselectedIndex = index)
                         } else {
-                            toast("没找到这里的可点击区域，请再点准一点")
+                            openPickerForPureImageTarget(
+                                x = event.rawX.toInt(),
+                                y = event.rawY.toInt()
+                            )
                         }
                     }
                     true
@@ -190,6 +194,46 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
             }
         }
         return bestIndex
+    }
+
+    private fun openPickerForPureImageTarget(x: Int, y: Int) {
+        val frame = screen
+        if (frame == null) {
+            toast("截图已失效，请重新点选样本")
+            show()
+            return
+        }
+
+        val visibleRects = service.collectVisibleRectsAt(x, y)
+        if (visibleRects.isNotEmpty()) {
+            val baseIndex = rects.size
+            val targets = visibleRects.map { rect ->
+                VisualSampleTapTarget(rect.left, rect.top, rect.right, rect.bottom)
+            }
+            val best = VisualSampleTapPolicy.smallestContaining(targets, x, y)
+            rects = rects + visibleRects
+            showPicker(preselectedIndex = baseIndex + (best ?: 0))
+            return
+        }
+
+        val manualTarget = VisualSampleTapPolicy.fallbackCrop(
+            x = x,
+            y = y,
+            screenWidth = frame.width,
+            screenHeight = frame.height,
+            targetSize = dp(92)
+        )
+        if (manualTarget == null) {
+            toast("这个位置在截图外，请再点准一点")
+            return
+        }
+        rects = rects + Rect(
+            manualTarget.left,
+            manualTarget.top,
+            manualTarget.right,
+            manualTarget.bottom
+        )
+        showPicker(preselectedIndex = rects.lastIndex)
     }
 
     private fun showPicker(preselectedIndex: Int = -1) {
@@ -233,6 +277,57 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
         }
         panel.addView(quickRow)
 
+        val previewImage = ImageView(service).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            visibility = View.GONE
+        }
+        val previewHint = TextView(service).apply {
+            text = "选中候选后，这里会显示实际截取内容"
+            textSize = 12f
+            setTextColor(Color.parseColor("#6B7280"))
+            gravity = Gravity.CENTER
+        }
+        val preview = FrameLayout(service).apply {
+            setBackgroundColor(Color.parseColor("#11000000"))
+            addView(previewImage, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            ))
+            addView(previewHint, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER
+            ))
+        }
+        panel.addView(
+            preview,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(86)).apply {
+                topMargin = dp(8)
+            }
+        )
+
+        fun updatePreview(index: Int) {
+            val rect = rects.getOrNull(index)
+            val crop = rect?.let { createSampleCrop(frame, it) }
+            if (crop == null) {
+                previewImage.visibility = View.GONE
+                previewHint.visibility = View.VISIBLE
+            } else {
+                previewImage.setImageBitmap(crop)
+                previewImage.visibility = View.VISIBLE
+                previewHint.visibility = View.GONE
+            }
+        }
+
+        fun selectCandidate(index: Int, row: View) {
+            selected = index
+            selectedRow?.background = rounded(Color.parseColor("#F3F4F6"), dp(8f))
+            row.background = rounded(Color.parseColor("#CCDCFCE7"), dp(8f))
+            selectedRow = row
+            updatePreview(index)
+        }
+
         val list = LinearLayout(service).apply { orientation = LinearLayout.VERTICAL }
         candidates.forEachIndexed { index, rect ->
             val (existing, score) = try {
@@ -240,24 +335,31 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
             } catch (_: Exception) {
                 Pair("", 0f)
             }
-            val row = TextView(service).apply {
+            val text = TextView(service).apply {
                 text = rowText(index, rect, existing, score)
                 textSize = 13f
                 setTextColor(Color.parseColor("#1F2937"))
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val thumbnail = ImageView(service).apply {
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                background = rounded(Color.parseColor("#E5E7EB"), dp(6f))
+                layoutParams = LinearLayout.LayoutParams(dp(54), dp(36)).apply {
+                    marginEnd = dp(8)
+                }
+                setImageBitmap(createSampleThumbnail(frame, rect, dp(54), dp(36)))
+            }
+            val row = LinearLayout(service).apply {
+                gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(9), dp(8), dp(9), dp(8))
                 background = rounded(Color.parseColor("#F3F4F6"), dp(8f))
                 setOnClickListener {
-                    selected = index
-                    selectedRow?.setBackgroundColor(Color.parseColor("#F3F4F6"))
-                    setBackgroundColor(Color.parseColor("#CCDCFCE7"))
-                    selectedRow = this
-                }
-                if (index == preselectedIndex) {
-                    selected = index
-                    background = rounded(Color.parseColor("#CCDCFCE7"), dp(8f))
-                    selectedRow = this
+                    selectCandidate(index, this)
                 }
             }
+            row.addView(thumbnail)
+            row.addView(text)
+            if (index == preselectedIndex) selectCandidate(index, row)
             list.addView(
                 row,
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -341,7 +443,6 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
             val saved = library.add(crop, label, packageName)
             toast(if (saved == null) "样本保存失败" else "已保存「$label」")
             if (saved != null) {
-                selectedRow?.append("  · 已保存")
                 mainHandler.postDelayed({ hide() }, 450L)
             }
         } catch (_: Exception) {
@@ -353,6 +454,32 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
         val size = "${rect.width()}×${rect.height()}"
         return if (existing.isBlank()) "#${index + 1} · $size"
         else "#${index + 1} · $size · 已像「$existing」(${(score * 100).toInt()}%)"
+    }
+
+    private fun createSampleCrop(frame: Bitmap, rect: Rect): Bitmap? {
+        val left = rect.left.coerceIn(0, frame.width - 1)
+        val top = rect.top.coerceIn(0, frame.height - 1)
+        val right = rect.right.coerceIn(left + 1, frame.width)
+        val bottom = rect.bottom.coerceIn(top + 1, frame.height)
+        return try {
+            Bitmap.createBitmap(frame, left, top, right - left, bottom - top)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun createSampleThumbnail(
+        frame: Bitmap,
+        rect: Rect,
+        width: Int,
+        height: Int
+    ): Bitmap? {
+        val crop = createSampleCrop(frame, rect) ?: return null
+        return try {
+            Bitmap.createScaledBitmap(crop, width, height, true)
+        } catch (_: Exception) {
+            crop
+        }
     }
 
     private fun toast(message: String) {
@@ -372,5 +499,51 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
 
     private fun dp(value: Float): Float {
         return value * service.resources.displayMetrics.density
+    }
+}
+
+internal data class VisualSampleTapTarget(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int
+) {
+    val width: Int get() = right - left
+    val height: Int get() = bottom - top
+    val area: Int get() = width * height
+
+    fun contains(x: Int, y: Int): Boolean =
+        x in left until right && y in top until bottom
+}
+
+internal object VisualSampleTapPolicy {
+    fun smallestContaining(
+        targets: List<VisualSampleTapTarget>,
+        x: Int,
+        y: Int
+    ): Int? {
+        return targets.withIndex()
+            .filter { it.value.contains(x, y) }
+            .minByOrNull { it.value.area }
+            ?.index
+    }
+
+    fun fallbackCrop(
+        x: Int,
+        y: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+        targetSize: Int
+    ): VisualSampleTapTarget? {
+        if (x !in 0 until screenWidth || y !in 0 until screenHeight ||
+            screenWidth <= 0 || screenHeight <= 0 || targetSize <= 0
+        ) return null
+
+        val half = targetSize / 2
+        val left = (x - half).coerceAtLeast(0)
+        val top = (y - half).coerceAtLeast(0)
+        val right = (left + targetSize).coerceAtMost(screenWidth)
+        val bottom = (top + targetSize).coerceAtMost(screenHeight)
+        return VisualSampleTapTarget(left, top, right, bottom)
     }
 }

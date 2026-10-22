@@ -536,6 +536,49 @@ class AssistantAccessibilityService : AccessibilityService() {
         return output
     }
 
+    /** 点选样本兜底：纯图像按钮可能不是 clickable，但它的可见节点仍然有屏幕范围。 */
+    fun collectVisibleRectsAt(x: Int, y: Int): List<Rect> {
+        val roots = LinkedHashSet<AccessibilityNodeInfo>()
+        rootInActiveWindow?.let { roots.add(it) }
+        try {
+            windows?.forEach { window ->
+                window.root?.let { root -> roots.add(root) }
+            }
+        } catch (_: Exception) {
+        }
+        val (screenWidth, screenHeight) = realScreenSize()
+        val output = ArrayList<Rect>()
+        val seenRects = HashSet<String>()
+
+        fun walk(node: AccessibilityNodeInfo?) {
+            if (node == null || output.size >= 30) return
+            val rawRect = Rect()
+            node.getBoundsInScreen(rawRect)
+            val rect = Rect(rawRect).apply { intersect(0, 0, screenWidth, screenHeight) }
+            val usable = !rect.isEmpty &&
+                rect.contains(x, y) &&
+                rect.width() >= 16 && rect.height() >= 16 &&
+                rect.width() <= screenWidth * 9 / 10 &&
+                rect.height() <= screenHeight * 5 / 10
+            val rectKey = "${rect.left},${rect.top},${rect.right},${rect.bottom}"
+            if (usable && seenRects.add(rectKey)) output.add(rect)
+            for (index in 0 until node.childCount) {
+                try {
+                    walk(node.getChild(index))
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        roots.forEach(::walk)
+        output.sortWith(
+            compareBy<Rect> { it.width() * it.height() }
+                .thenBy { it.top }
+                .thenBy { it.left }
+        )
+        return output
+    }
+
     fun captureForSamples(): Bitmap? = CaptureService.capture()
 
     private fun roundedBackground(color: Int, radiusPx: Float): GradientDrawable {
