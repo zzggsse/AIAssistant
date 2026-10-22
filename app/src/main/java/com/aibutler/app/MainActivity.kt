@@ -108,6 +108,7 @@ class MainActivity : AppCompatActivity() {
         }.getOrNull() ?: "unknown"
         android.util.Log.i("AIButler", "APP onCreate build=v$appVersion (双脑切换+AutoGLM专用脑+全能力)")
         Prefs.ensureThinkingVisible(this)
+        Prefs.ensureAutoGlmDefault(this)
 
         adapter = ChatAdapter(this)
         adapter.loadPersisted()

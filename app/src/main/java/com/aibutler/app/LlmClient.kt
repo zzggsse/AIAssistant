@@ -304,9 +304,9 @@ object LlmClient {
         val body = JsonObject().apply {
             addProperty("model", "autoglm-phone")
             add("messages", messages)
-            // 192 太小：思考 + 动作会被截断，模型为了保住动作只能丢掉思考。
-            // 这里留够空间，思考过程才有内容可看。
-            addProperty("max_tokens", 1024)
+            // 判断质量来自思考过程：1024 时复杂页面会想一半被截断，
+            // 2048 给足观察推理空间，动作本身只占很少 token。
+            addProperty("max_tokens", 2048)
             addProperty("temperature", 0.0)
             addProperty("top_p", 0.85)
             addProperty("frequency_penalty", 0.2)

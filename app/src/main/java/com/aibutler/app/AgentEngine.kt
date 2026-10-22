@@ -348,6 +348,12 @@ object AgentEngine {
     /** 发给视觉脑的截图最大宽度：太低时小字/图标糊成一片，1280 是清晰度与流量的平衡点 */
     const val VISION_MAX_W = 1280
 
+    /**
+     * 发给视觉模型的 JPEG 质量。实测 58 时小按钮文字已发糊，模型只能靠猜坐标；
+     * 80 能保住小字轮廓，体积仍远小于 PNG。
+     */
+    const val VISION_JPEG_QUALITY = 80
+
     /** 截屏并缩放编码base64，返回 {b64, realW, realH}；失败返回null */
     fun screenB64(a: Activity, maxW: Int): JsonObject? {
         if (!CaptureService.isActive()) return null
@@ -359,7 +365,7 @@ object AgentEngine {
             Bitmap.createScaledBitmap(bmp, maxW, h, true)
         } else bmp
         val bos = java.io.ByteArrayOutputStream()
-        scaled.compress(Bitmap.CompressFormat.JPEG, 58, bos)
+        scaled.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, bos)
         val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
         if (scaled !== bmp) scaled.recycle()
         bmp.recycle()
@@ -378,7 +384,7 @@ object AgentEngine {
             "你是一个运行在安卓手机上的页面操作智能体。用户只给出目标；你负责推断大致流程，进入合适应用，然后逐页观察和操作。\n" +
             "每一轮都按这个固定循环思考：1) 现在在哪个应用和页面；2) 浏览页面内容并判断目标是否可见；3) 判断页面能否继续下滑；4) 目标可见就点击/输入，目标不可见且能下滑就先滑动查看完整内容；5) 进入新页面后重新观察，绝不沿用旧结论。\n" +
             "你必须严格按照要求输出以下格式：\n<think>{think}</think>\n<answer>{action}</answer>\n\n" +
-            "其中：\n- {think} 用中文写清楚你的观察和判断：当前是什么页面、目标元素在哪、为什么选这个入口、下一步做什么。不超过120个字。\n- {action} 是本次执行的唯一操作指令，必须严格遵循下方定义的指令格式。\n\n" +
+            "其中：\n- {think} 用中文写清楚你的观察和判断：当前是什么页面、目标元素在哪、为什么选这个入口、下一步做什么。把依据写清楚，不限制字数，但不要复述任务原文。\n- {action} 是本次执行的唯一操作指令，必须严格遵循下方定义的指令格式。\n\n" +
             "操作指令及其作用如下：\n" +
             "- do(action=\"Launch\", app=\"xxx\")  启动目标app。\n" +
             "- do(action=\"Tap\", element=[x,y])  点击屏幕上的特定点。坐标从左上角(0,0)到右下角(999,999)。\n" +
@@ -479,6 +485,18 @@ object AgentEngine {
             .containsMatchIn(action)
     }
 
+    /**
+     * 动作后等待页面稳定的上限。页面指纹一稳定就提前返回，所以上限只兜慢页面；
+     * 旧上限（点击900ms等）经常在转场动画中途就读屏，把加载页当成最终页面。
+     */
+    fun actionSettleMaxMs(action: String): Long = when {
+        action.contains("Launch") -> 3000L
+        action.contains("Tap") -> 2200L
+        action.contains("Back") || action.contains("Home") -> 1800L
+        action.contains("Swipe") -> 1500L
+        else -> 500L
+    }
+
     /** 动作后不固定死等：页面指纹变化并稳定后立即返回，最多等一个上限。 */
     fun waitForActionSettle(action: String, beforeFingerprint: String?) {
         if (action.contains("Wait")) return
@@ -490,13 +508,7 @@ object AgentEngine {
             action.contains("Back") || action.contains("Home") -> 160L
             else -> 120L
         }
-        val maxMs = when {
-            action.contains("Launch") -> 1200L
-            action.contains("Tap") -> 900L
-            action.contains("Back") || action.contains("Home") -> 700L
-            action.contains("Swipe") -> 600L
-            else -> 320L
-        }
+        val maxMs = actionSettleMaxMs(action)
         // 统一用 System.nanoTime 计时（单调时钟，专用于测耗时）。
         // 注意不能和 SystemClock.elapsedRealtime 混用——两者原点不同，旧代码正是混用导致
         // "页面稳定即提前返回"永远不生效；也不能只依赖 elapsedRealtime——单测环境它被 mock 成 0 会死循环
@@ -860,7 +872,7 @@ object AgentEngine {
     }
 
     /** 用读屏到的可点击文字校正视觉模型坐标，避免“看对了入口、点错了位置”。 */
-    private fun correctTapToScreenElement(
+    internal fun correctTapToScreenElement(
         modelPoint: Pair<Int, Int>?,
         userTask: String,
         screenDump: String?
@@ -945,7 +957,10 @@ object AgentEngine {
                 (candidate.third - modelPoint.second) * (candidate.third - modelPoint.second)
             Triple(candidate, textScore(candidate.first), distance)
         }.filter { candidate ->
-            candidate.second >= 40 && candidate.third <= 5000 &&
+            // 读屏文字与任务完全命中时，视觉坐标只作参考：远距离也要吸附到真实控件。
+            // 一般匹配仍要求视觉坐标落在元素附近，防止远处的相似文字被误吸附。
+            val maxDistance = if (candidate.second >= 100000) 250000 else 5000
+            candidate.second >= 40 && candidate.third <= maxDistance &&
                 !PageGuard.isUnsafeRewardTap(userTask, candidate.first.first)
         }
         val target = scored.maxWithOrNull(compareBy({ it.second }, { -it.third }))?.first ?: return modelPoint!!
@@ -1192,7 +1207,8 @@ object AgentEngine {
                         val outW = scaled.width
                         val outH = scaled.height
                         val bos = java.io.ByteArrayOutputStream()
-                        scaled.compress(Bitmap.CompressFormat.JPEG, 55, bos)
+                        // look_screen 是读屏失效时的兜底眼睛，同样不能让小字糊掉
+                        scaled.compress(Bitmap.CompressFormat.JPEG, 75, bos)
                         val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
                         if (scaled !== bmp) scaled.recycle()
                         // 压缩进 b64 后原图不再需要；此前只有 safeHits 分支回收了 bmp，视觉分支每轮泄漏一张整屏大图

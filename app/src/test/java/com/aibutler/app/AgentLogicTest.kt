@@ -715,4 +715,49 @@ class AgentLogicTest {
         val a = "点击屏幕中央的视频。do(action=\"Tap\", element=[500,450])"
         assertFalse(AgentEngine.thinkActNavMismatch(a, 500, 450))
     }
+
+    // ========== 判断力增强回归：默认模型 / 思考空间 / 截图质量 / 稳定等待 / 读屏吸附 ==========
+
+    @Test
+    fun 默认厂商_智谱默认模型是AutoGLM手机脑() {
+        val zhipu = Vendors.byId("zhipu")
+        assertEquals("autoglm-phone", zhipu.model)
+        assertEquals("autoglm-phone", zhipu.models.first())
+    }
+
+    @Test
+    fun autoGlmPrompt_思考过程不再被120字上限压死() {
+        val p = AgentEngine.autoGlmSystemPrompt()
+        assertFalse("思考不应再被120字上限压缩", p.contains("不超过120个字"))
+        assertTrue("仍要求先思考再输出动作", p.contains("<think>{think}</think>"))
+    }
+
+    @Test
+    fun 视觉截图_质量不低于80保住小字() {
+        assertTrue("截图质量过低会让小按钮文字发糊", AgentEngine.VISION_JPEG_QUALITY >= 80)
+    }
+
+    @Test
+    fun 动作后稳定等待_上限放宽且快页面不受影响() {
+        assertTrue("点击后900ms常还在转场", AgentEngine.actionSettleMaxMs("do(action=\"Tap\", element=[500,300])") >= 2000)
+        assertTrue("启动应用加载更慢", AgentEngine.actionSettleMaxMs("do(action=\"Launch\", app=\"淘宝\")") >= 3000)
+        assertTrue("滑动后也要给页面滚动留时间", AgentEngine.actionSettleMaxMs("do(action=\"Swipe\", start=[500,700], end=[500,300])") >= 1500)
+    }
+
+    @Test
+    fun 读屏吸附_任务文字完全命中时跨屏纠正到真实控件() {
+        val dump = "当前应用: com.any.app\n" +
+            "可点击: 订单 [820,180]\n" +
+            "可点击: 首页 [500,500]"
+        val snapped = AgentEngine.correctTapToScreenElement(Pair(500, 500), "打开京东看订单", dump)
+        assertEquals(Pair(820, 180), snapped)
+    }
+
+    @Test
+    fun 读屏吸附_一般匹配仍要求视觉坐标落在元素附近() {
+        val dump = "当前应用: com.any.app\n" +
+            "可点击: 开宝箱得金币 [820,180]"
+        val kept = AgentEngine.correctTapToScreenElement(Pair(500, 500), "帮我开宝箱", dump)
+        assertEquals(Pair(500, 500), kept)
+    }
 }

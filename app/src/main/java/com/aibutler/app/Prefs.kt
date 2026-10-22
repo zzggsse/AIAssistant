@@ -22,11 +22,11 @@ object Vendors {
             "去 platform.deepseek.com 注册 → API Keys → 创建，便宜且好用"
         ),
         Vendor(
-            "zhipu", "智谱 GLM（有免费模型）",
-            "https://open.bigmodel.cn/api/paas/v4", "glm-4.5-flash",
-            listOf("glm-4.5-flash", "autoglm-phone", "glm-4-flash", "glm-4-flash-250414", "glm-4.5", "glm-4.6", "glm-4-plus"),
+            "zhipu", "智谱 GLM（AutoGLM 手机脑）",
+            "https://open.bigmodel.cn/api/paas/v4", "autoglm-phone",
+            listOf("autoglm-phone", "glm-4.5-flash", "glm-4-flash", "glm-4-flash-250414", "glm-4.5", "glm-4.6", "glm-4-plus"),
             "https://open.bigmodel.cn/usercenter/apikeys",
-            "去 open.bigmodel.cn 注册 → API Keys；glm-4.5-flash / glm-4-flash 免费。如果你买的是编程包月套餐（电脑上用 Claude Code/ccswitch 的那种），请选「智谱编程版」"
+            "去 open.bigmodel.cn 注册 → API Keys；默认 AutoGLM-Phone 手机脑（限时免费），也可以改选免费的 glm-4.5-flash。编程包月套餐请选「智谱编程版」"
         ),
         Vendor(
             "zhipu_coding", "智谱 GLM 编程版（包月套餐用这个）",
@@ -109,7 +109,7 @@ object Prefs {
         get(c).edit().putBoolean("fastMode", v).apply()
     }
 
-    fun autoGlm(c: Context): Boolean = get(c).getBoolean("autoGlm", false)
+    fun autoGlm(c: Context): Boolean = get(c).getBoolean("autoGlm", true)
     fun setAutoGlm(c: Context, v: Boolean) {
         get(c).edit().putBoolean("autoGlm", v).apply()
     }
@@ -134,6 +134,24 @@ object Prefs {
             .putBoolean("fastMode", false)
             .putBoolean(THINKING_VISIBLE_MIGRATION, true)
             .apply()
+    }
+
+    private const val AUTO_GLM_DEFAULT_MIGRATION = "autoGlmDefaultMigration"
+
+    /**
+     * 一次性迁移：智谱厂商下仍是旧默认 glm-4.5-flash 的设备切到 AutoGLM-Phone 手机脑。
+     * 只在第一次升级到本版本时执行；之后用户改回别的模型不会再被打断。
+     */
+    fun ensureAutoGlmDefault(c: Context) {
+        val sp = get(c)
+        if (sp.getBoolean(AUTO_GLM_DEFAULT_MIGRATION, false)) return
+        sp.edit().putBoolean(AUTO_GLM_DEFAULT_MIGRATION, true).apply()
+        if (vendorId(c) == "zhipu" && model(c) == "glm-4.5-flash") {
+            sp.edit()
+                .putString("model", "autoglm-phone")
+                .putBoolean("autoGlm", true)
+                .apply()
+        }
     }
 
     fun pin(c: Context): String {
