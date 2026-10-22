@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 
 class ConversationHistoryAdapter(
@@ -39,6 +40,12 @@ class ConversationHistoryAdapter(
             if (active) R.drawable.bg_history_selected else R.drawable.bg_history_item
         )
         holder.title.text = conversation.title.ifBlank { "新对话" }
+        holder.title.setTextColor(
+            ContextCompat.getColor(
+                holder.root.context,
+                if (active) R.color.colorPrimaryDark else R.color.colorTextPrimary
+            )
+        )
         holder.root.setOnClickListener { onConversationClick(conversation) }
         holder.delete.setOnClickListener { onDeleteClick(conversation) }
     }
