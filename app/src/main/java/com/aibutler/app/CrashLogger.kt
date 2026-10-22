@@ -68,8 +68,12 @@ object CrashLogger {
         if (current.exists() && current.length() > MAX_BYTES) {
             // 保留最近 MAX_FILES-1 个历史日志，当前转存为带时间戳的归档
             val dir = current.parentFile ?: return
-            val archives = dir.listFiles { f -> f.name.startsWith("error_log_") }?.sorted() ?: emptyList()
-            while (archives.size >= MAX_FILES) archives.first().delete()
+            val archives = dir.listFiles { f -> f.name.startsWith("error_log_") }?.sorted()?.toMutableList() ?: mutableListOf()
+            // delete 失败必须把元素从列表剔除/退出循环，否则 archives.size 永远不变 → 死循环，
+            // 且这里跑在崩溃处理路径上，会把崩溃处理本身挂死（体检 P1-6）
+            while (archives.size >= MAX_FILES) {
+                if (!archives.removeAt(0).delete()) break
+            }
             val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             val archived = current.renameTo(File(dir, "error_log_$ts.txt"))
             if (!archived) {

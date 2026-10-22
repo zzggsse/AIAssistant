@@ -33,10 +33,12 @@ object NetGuard {
             "本机/局域网地址（localhost、192.168.x.x、10.x.x.x 等）可以继续用 http://"
     }
 
-    /** 是否本机/局域网地址：localhost、单标签主机名（如 mypc）、.local、私网 IPv4 段 */
+    /** 是否本机/局域网地址：localhost、单标签主机名（如 mypc）、.local、私网 IPv4 段。
+     *  IPv6 只有 ::1 放行——公网 IPv6 地址不含点，曾被 `!contains('.')` 误判成局域网放行（体检 P2-4） */
     fun isLocalOrLanHost(host: String): Boolean {
         val h = host.lowercase().removeSuffix(".")
         if (h.isEmpty() || h == "localhost" || h == "::1" || h.endsWith(".local")) return true
+        if (h.contains(':')) return false   // 其余 IPv6 一律不当作局域网
         if (!h.contains('.')) return true   // 单标签主机名只在局域网能解析
         val parts = h.split(".")
         if (parts.size != 4) return false   // IPv6 等其他格式不在此判断

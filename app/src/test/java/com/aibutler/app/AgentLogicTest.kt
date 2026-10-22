@@ -575,6 +575,20 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 退出记忆_激励广告退出文案变体可识别() {
+        // 激励广告 SDK 常见的「退出广告」按钮变体都应得正分，系统才允许代点
+        for (label in listOf("残忍拒绝", "不玩了", "狠心离开", "狠心放弃", "暂离", "拒绝", "不再提醒")) {
+            assertTrue("「$label」应识别为退出控件", ExitMemory.scoreButton(label) > 0)
+        }
+        // 「残忍拒绝」是明确的放弃语义，得分应高于普通关闭类
+        assertTrue(ExitMemory.scoreButton("残忍拒绝") >= ExitMemory.scoreButton("关闭"))
+        // 广告转化/继续类新变体永远不能当退出
+        for (label in listOf("立即体验", "了解更多", "去完成", "去看看", "去逛逛", "开心收下", "点击领取")) {
+            assertTrue("「$label」不应识别为退出控件", ExitMemory.scoreButton(label) <= 0)
+        }
+    }
+
+    @Test
     fun 退出记忆_验证路线排在普通候选前() {
         val dump = "当前应用: com.any.third.party\n" +
             "可点击: 关闭 {btn_close,ImageView} [940,80]\n" +
@@ -730,6 +744,116 @@ class AgentLogicTest {
         assertTrue(PageGuard.isDownloadWall(dump))
         assertEquals("坚持退出", PageGuard.safeAdExitLabel(dump))
         assertFalse(PageGuard.isDownloadWall("当前应用: com.any.reward.app\n页面内容: 任务中心 看广告领金币"))
+    }
+
+    // ========== PopupGuard：通用阻塞性弹窗硬关闭层 ==========
+
+    @Test
+    fun 弹窗硬关闭_更新提示命中且给出安全关闭控件() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 发现新版本 v8.2.0 优化性能体验\n" +
+            "可点击: 立即更新 {btn_update,TextView} [500,700]\n" +
+            "可点击: 以后再说 {btn_cancel,TextView} [500,840]"
+        val plan = PopupGuard.plan("帮我看一下今天的金币收益", dump)
+        assertNotNull("更新弹窗应被识别", plan)
+        assertEquals("以后再说", plan!!.closeLabel)
+        assertTrue("转化按钮绝不能作为关闭控件", "立即更新" != plan.closeLabel)
+    }
+
+    @Test
+    fun 弹窗硬关闭_激励播放页绝不代点() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 看完广告可得88金币 15s后可领取\n" +
+            "可点击: 关闭 {btn_close,ImageView} [940,80]\n" +
+            "可点击: 继续观看得奖励 {btn_continue,TextView} [500,700]"
+        assertNull("看广告领奖过程不是弹窗，不能被中断", PopupGuard.plan("看广告刷金币", dump))
+    }
+
+    @Test
+    fun 弹窗硬关闭_任务本身要更新时不拦() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 发现新版本 v8.2.0 立即更新\n" +
+            "可点击: 以后再说 {btn_cancel,TextView} [500,840]"
+        assertNull("用户就是要更新，更新弹窗是任务目标", PopupGuard.plan("帮我把淘宝更新到最新版", dump))
+    }
+
+    @Test
+    fun 弹窗硬关闭_普通信息流不误伤() {
+        val dump = "当前应用: com.any.video.app\n" +
+            "页面内容: 推荐 视频 评论182 分享\n" +
+            "可点击: 关闭 {btn_close,ImageView} [940,80]"
+        assertNull("无弹窗特征的普通页面不能触发", PopupGuard.plan("刷视频", dump))
+    }
+
+    @Test
+    fun 弹窗硬关闭_公告加温馨提示双弱特征命中() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 活动公告 温馨提示：活动规则调整\n" +
+            "可点击: 我知道了 {btn_ok,TextView} [500,800]"
+        val plan = PopupGuard.plan("刷视频赚金币", dump)
+        assertNotNull("双弱特征+关闭控件应触发", plan)
+        assertEquals("我知道了", plan!!.closeLabel)
+    }
+
+    @Test
+    fun 弹窗硬关闭_没有安全关闭控件时不动手() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 发现新版本 v8.2.0 立即更新\n" +
+            "可点击: 立即更新 {btn_update,TextView} [500,700]"
+        assertNull("只剩转化按钮时绝不代点，也不盲目返回", PopupGuard.plan("刷视频", dump))
+    }
+
+    @Test
+    fun 页面防护_非创作任务误入拍摄页可识别() {
+        val dump = "当前应用: com.any.video.app\n" +
+            "页面内容: 选择音乐 美颜 滤镜 发布\n" +
+            "可点击: 发布 {publish,TextView} [900,960]"
+        assertTrue(PageGuard.isUnintendedCreationPage("帮我签到领金币", dump))
+        assertFalse("创作任务本身不拦", PageGuard.isUnintendedCreationPage("帮我拍视频并发布", dump))
+    }
+
+    // ========== AgentEngine 点击链：下载墙/创作页/弹窗硬守卫（兜住批量动作间隙） ==========
+
+    @Test
+    fun tap_下载墙页点击被改为退出() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 广告 立即下载 红果免费短剧\n" +
+            "可点击: 坚持退出 [500,1180]\n" +
+            "可点击: 立即下载 [500,1950]"
+        val r = exec("do(action=\"Tap\", element=[500,1950])", task = "帮我刷金币", dump = dump)
+        assertEquals("__JUMP_BLOCK__", r.message)
+        assertFalse("不得执行原点击", r.info.contains("已点击屏幕"))
+    }
+
+    @Test
+    fun tap_非创作任务误入拍摄页点击被改为退出() {
+        val dump = "当前应用: com.any.video.app\n" +
+            "页面内容: 选择音乐 美颜 滤镜 发布\n" +
+            "可点击: 发布 [900,960]"
+        val r = exec("do(action=\"Tap\", element=[900,960])", task = "去签到领金币", dump = dump)
+        assertEquals("__JUMP_BLOCK__", r.message)
+        assertFalse(r.info.contains("已点击屏幕"))
+    }
+
+    @Test
+    fun tap_弹窗页点非关闭控件被改为关弹窗() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 发现新版本 优化体验\n" +
+            "可点击: 查看详情 [500,500]\n" +
+            "可点击: 以后再说 [500,840]"
+        val r = exec("do(action=\"Tap\", element=[500,500])", task = "帮我刷金币", dump = dump)
+        assertEquals("__POPUP_BLOCK__", r.message)
+        assertTrue(r.info.contains("弹窗"))
+        assertFalse(r.info.contains("已点击屏幕"))
+    }
+
+    @Test
+    fun tap_弹窗页点关闭控件本身放行() {
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 发现新版本 优化体验\n" +
+            "可点击: 以后再说 [500,840]"
+        val r = exec("do(action=\"Tap\", element=[500,840])", task = "帮我刷金币", dump = dump)
+        assertFalse("模型自己在关弹窗时不应被拦截", r.message == "__JUMP_BLOCK__")
     }
 
     @Test

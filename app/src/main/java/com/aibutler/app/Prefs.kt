@@ -169,9 +169,13 @@ object Prefs {
     fun pin(c: Context): String {
         val sp = get(c)
         sp.getString(KEY_PIN, null)?.let { return SecureStore.decrypt(it) }
-        // 旧版本明文 PIN → 首次读取自动迁移为加密存储
+        // 旧版本明文 PIN → 首次读取自动迁移为加密存储。
+        // encrypt 失败返回 ""（Keystore 故障，刷机恢复备份时高发）：此时绝不能删明文键，
+        // 否则明文没了、加密值又是空串（=未配置），PIN 静默丢失（体检 P1-2）
         val legacy = sp.getString(KEY_PIN_LEGACY, null) ?: return ""
-        sp.edit().putString(KEY_PIN, SecureStore.encrypt(legacy)).remove(KEY_PIN_LEGACY).apply()
+        val enc = SecureStore.encrypt(legacy)
+        if (enc.isBlank()) return legacy
+        sp.edit().putString(KEY_PIN, enc).remove(KEY_PIN_LEGACY).apply()
         return legacy
     }
 
@@ -196,9 +200,11 @@ object Prefs {
     fun apiKey(c: Context): String {
         val sp = sp(c)
         sp.getString(KEY_API_KEY, null)?.let { return SecureStore.decrypt(it) }
-        // 旧版本明文 Key → 首次读取自动迁移为加密存储
+        // 旧版本明文 Key → 首次读取自动迁移为加密存储；迁移失败保留明文键下次再试（同 pin 的理由）
         val legacy = sp.getString(KEY_API_KEY_LEGACY, null) ?: return ""
-        sp.edit().putString(KEY_API_KEY, SecureStore.encrypt(legacy)).remove(KEY_API_KEY_LEGACY).apply()
+        val enc = SecureStore.encrypt(legacy)
+        if (enc.isBlank()) return legacy
+        sp.edit().putString(KEY_API_KEY, enc).remove(KEY_API_KEY_LEGACY).apply()
         return legacy
     }
 

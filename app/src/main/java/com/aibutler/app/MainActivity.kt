@@ -317,10 +317,13 @@ class MainActivity : AppCompatActivity() {
 
     /** 权限补全后自动继续排队中的任务 */
     private fun resumePendingRunIfReady() {
-        val pending = pendingRuns.firstOrNull() ?: return
+        val pending = synchronized(pendingRuns) { pendingRuns.firstOrNull() } ?: return
         if (busy) return
         if (!checkPermissionsOrLaunch()) return
-        pendingRuns.removeAt(0)
+        synchronized(pendingRuns) {
+            // 再核对队头：这期间任务线程可能刚好取走了它
+            if (pendingRuns.firstOrNull() == pending) pendingRuns.removeAt(0)
+        }
         Thread {
             if (!CaptureService.isActive()) {
                 var waited = 0
@@ -350,6 +353,9 @@ class MainActivity : AppCompatActivity() {
             needed.add(Manifest.permission.RECORD_AUDIO)
         if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED)
             needed.add(Manifest.permission.READ_CONTACTS)
+        // 只授 WRITE 不授 READ 时，日历查询会抛 SecurityException 被误报成"没有可写的日历"（体检 P2-9）
+        if (checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.READ_CALENDAR)
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             if (checkSelfPermission(Manifest.permission.WRITE_CALENDAR) != PackageManager.PERMISSION_GRANTED)
                 needed.add(Manifest.permission.WRITE_CALENDAR)
@@ -362,11 +368,12 @@ class MainActivity : AppCompatActivity() {
         if (!CaptureService.isActive()) requestCapture()
     }
 
-    /** 权限已全部开启时，清除聊天里的"XX未启动"警告 */
+    /** 权限已全部开启时，清除聊天里的"XX未启动"警告。
+     *  不再按「重试」关键词过滤：LLM 的正常报错（如"请求超时（已重试1次）"）会被误删（体检 P2-8） */
     private fun removePermissionWarnings() {
         val toRemove = adapter.items.filter {
             it.role == "system" && (it.text.contains("未连接") || it.text.contains("未启动") ||
-                it.text.contains("用不了") || it.text.contains("重试"))
+                it.text.contains("用不了"))
         }
         if (toRemove.isNotEmpty()) {
             adapter.items.removeAll(toRemove)
@@ -441,9 +448,11 @@ class MainActivity : AppCompatActivity() {
             CaptureService.start(this, resultCode, data)
             Toast.makeText(this, "✅ 屏幕视觉已开启，AI 能看懂图标了", Toast.LENGTH_LONG).show()
             observeCaptureStart()
-            val pending = pendingRuns.firstOrNull()
+            val pending = synchronized(pendingRuns) { pendingRuns.firstOrNull() }
             if (pending != null) {
-                pendingRuns.removeAt(0)
+                synchronized(pendingRuns) {
+                    if (pendingRuns.firstOrNull() == pending) pendingRuns.removeAt(0)
+                }
                 Thread {
                     var waited = 0
                     while (!CaptureService.isActive() && waited < 8000) {
@@ -637,6 +646,7 @@ class MainActivity : AppCompatActivity() {
             pausedTask = null
             cancelRequested = false
             busy = true
+            activeTaskText = saved.userText
             TaskControlBus.taskRunning = true
             AssistantAccessibilityService.instance?.showTaskControls()
             setBusyUi(true)
@@ -660,6 +670,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 } finally {
                     busy = false
+                    activeTaskText = null
                     TaskControlBus.taskRunning = false
                     AssistantAccessibilityService.instance?.hideTaskControls()
                     AgentKeepAliveService.stop(this@MainActivity)
@@ -679,6 +690,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (busy) {
+            // 与 handleDebugSend 对齐：忙时同指令去重，语音连说两遍不会排两条（体检 P2-20）
+            if (trimmedText == activeTaskText || pendingRuns.contains(userText)) {
+                Toast.makeText(this, "已拦截自动重复指令；如需重跑，请开启新对话", Toast.LENGTH_SHORT).show()
+                return
+            }
             Toast.makeText(this, "⏳ AI 正忙，任务已排队，完成后自动开始", Toast.LENGTH_SHORT).show()
             pendingRuns.add(userText)
             adapter.add(ChatAdapter.Msg("system", "已排队：$userText"))
@@ -718,6 +734,7 @@ class MainActivity : AppCompatActivity() {
 
         Thread {
             var paused = false
+            var endedInError = false
             try {
                 if (directAlarm != null) {
                     android.util.Log.i(
@@ -1101,6 +1118,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             } catch (e: Exception) {
+                endedInError = true
                 android.util.Log.e("AIButler", "AGENT 异常", e)
                 CrashLogger.log("AGENT", "Agent task failed for: $userText", e)
                 runOnUiThread {
@@ -1110,17 +1128,21 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 busy = false
                 activeTaskText = null
-                lastCompletedTaskText = userText
-                lastCompletedTaskAt = System.currentTimeMillis()
-                Prefs.get(this).edit()
-                    .putString("lastCompletedTaskText", userText)
-                    .putLong("lastCompletedTaskAt", lastCompletedTaskAt)
-                    .apply()
+                // 只把「自然跑完」的任务记为已完成：用户主动暂停/出错的任务允许 60 秒内
+                // 重发同指令重试，不再被「已拦截自动重复指令」误拦（体检 P1-7）
+                if (!endedInError && !cancelRequested) {
+                    lastCompletedTaskText = userText
+                    lastCompletedTaskAt = System.currentTimeMillis()
+                    Prefs.get(this).edit()
+                        .putString("lastCompletedTaskText", userText)
+                        .putLong("lastCompletedTaskAt", lastCompletedTaskAt)
+                        .apply()
+                }
                 TaskControlBus.taskRunning = false
                 AssistantAccessibilityService.instance?.hideTaskControls()
                 AgentKeepAliveService.stop(this@MainActivity)
                 runOnUiThread { setBusyUi(false, success = !cancelRequested) }
-                val next = pendingRuns.removeFirstOrNull()
+                val next = synchronized(pendingRuns) { pendingRuns.removeFirstOrNull() }
                 if (next != null) {
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg("system", "▶️ 排队的任务开始了"))
@@ -1182,8 +1204,10 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    /** 忙时排队的任务（FIFO）：每条指令独立执行，不再用换行拼成一条 */
-    private val pendingRuns = mutableListOf<String>()
+    /** 忙时排队的任务（FIFO）：每条指令独立执行，不再用换行拼成一条。
+     *  synchronizedList：主线程 add/remove 与任务线程 removeFirstOrNull 并发，裸 ArrayList
+     *  有极小概率抛 IndexOutOfBounds 直接崩（体检 P1-8）；复合操作处再用 synchronized(pendingRuns) */
+    private val pendingRuns: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
     private var projectionRequestActive = false
 
     /** 界面重建后持续刷新 busy 状态的 tick（onDestroy 里统一移除回调，防止旧界面反复刷新泄漏） */
@@ -1192,7 +1216,12 @@ class MainActivity : AppCompatActivity() {
         override fun run() {
             if (busy) {
                 adapter.notifyDataSetChanged()
-                rv.scrollToPosition(adapter.items.size - 1)
+                // 只在用户本来就在底部时才跟随滚动，否则会把上翻看历史的人拽回去（体检 P2-7）
+                val lm = rv.layoutManager as? androidx.recyclerview.widget.LinearLayoutManager
+                val last = lm?.findLastCompletelyVisibleItemPosition() ?: -1
+                if (last < 0 || last >= adapter.items.size - 2) {
+                    rv.scrollToPosition(adapter.items.size - 1)
+                }
             }
             uiTickHandler.postDelayed(this, 2000)
         }
@@ -1206,14 +1235,17 @@ class MainActivity : AppCompatActivity() {
         val currentStep = saved.currentStep
         val launchedTarget = saved.launchedTarget
 
+        // 恢复时补齐经验与原生工具标记：原来只传 2 参，重建的 system prompt 丢了这两段（体检 P2-10）
+        val relatedExp = AgentExperienceStore.relevant(this, saved.userText)
+        val hasNativeToolMatch = TaskRouter.matchesNativeTool(saved.userText)
         if (history.size() == 0 || history.get(0).asJsonObject.get("role")?.asString != "system") {
             val fresh = JsonArray()
-            fresh.add(AgentEngine.systemPrompt(plan, currentStep).let { AgentEngine.msg("system", it) })
+            fresh.add(AgentEngine.systemPrompt(plan, currentStep, relatedExp, hasNativeToolMatch).let { AgentEngine.msg("system", it) })
             for (e in history) fresh.add(e)
             while (history.size() > 0) history.remove(0)
             for (e in fresh) history.add(e)
         } else {
-            history.get(0).asJsonObject.addProperty("content", AgentEngine.systemPrompt(plan, currentStep))
+            history.get(0).asJsonObject.addProperty("content", AgentEngine.systemPrompt(plan, currentStep, relatedExp, hasNativeToolMatch))
         }
         history.add(AgentEngine.msg("user", "（用户说继续，请从上次暂停的地方接着做）"))
 
@@ -1286,11 +1318,55 @@ class MainActivity : AppCompatActivity() {
             addProperty("role", "user")
             addProperty("content", "（用户说继续，请从上次暂停的地方接着做）")
         })
+        // 恢复任务重建完成判定契约（体检 P2-10）：开放式任务恢复后不再被旧 40 轮上限误杀，
+        // 且「打开App」类恢复同样能被前台硬判据直接收敛
+        val completion = TaskCompletionVerifier.contractFor(
+            saved.userText, DeviceTools.guessApp(this, saved.userText), Prefs.openEndedSessionMinutes(this)
+        )
+        val roundCap = if (completion.taskClass == TaskCompletionVerifier.TaskClass.OPEN_ENDED) 800 else 80
+        var sessionStartMs = android.os.SystemClock.elapsedRealtime()
+        val boundedStartMs = sessionStartMs
         var finalReply: String? = null
         var round = 0
         while (finalReply == null && !cancelRequested) {
             round++
-            if (round >= 40) { finalReply = "恢复后达到轮次上限，自动停止"; break }
+            if (round >= roundCap) { finalReply = "恢复后达到轮次上限，自动停止"; break }
+            val nowMs = android.os.SystemClock.elapsedRealtime()
+            val foregroundCheck = completion.successCheck as? TaskCompletionVerifier.SuccessCheck.ForegroundApp
+            if (foregroundCheck != null &&
+                TaskCompletionVerifier.isForegroundStable(
+                    AssistantAccessibilityService.instance?.currentPackage(), foregroundCheck.pkg
+                ) {
+                    Thread.sleep(600)
+                    AssistantAccessibilityService.instance?.currentPackage()
+                }
+            ) {
+                finalReply = "✅ 已完成：${foregroundCheck.appName} 已打开（已验证应用在前台）"
+                break
+            }
+            if (completion.taskClass == TaskCompletionVerifier.TaskClass.OPEN_ENDED) {
+                if (nowMs - sessionStartMs >= completion.sessionCapMs) {
+                    val sessionMsg = "已连续挂机${TaskCompletionVerifier.formatDuration(nowMs - sessionStartMs)}、执行${round}轮。要继续挂机还是现在收工？"
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "⏰ $sessionMsg"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    val ask = AssistantAccessibilityService.instance
+                        ?.showSessionContinueAsk(sessionMsg, completion.askGraceMs)
+                    if (ask == SessionAsk.END) {
+                        finalReply = "⏹ 已按你的选择收工：本次共挂机${TaskCompletionVerifier.formatDuration(nowMs - sessionStartMs)}、执行${round}轮。"
+                        break
+                    }
+                    sessionStartMs = android.os.SystemClock.elapsedRealtime()
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "▶️ 继续挂机，${TaskCompletionVerifier.formatDuration(completion.sessionCapMs)}后再来问你。"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                }
+            } else if (nowMs - boundedStartMs >= completion.boundedTimeoutMs) {
+                finalReply = "⚠️ 任务已运行${TaskCompletionVerifier.formatDuration(nowMs - boundedStartMs)}仍未收敛，超时保护自动停止。可以再说「继续」重新执行。"
+                break
+            }
             while (ctx.size() > 10 && ctx.size() >= 4) { ctx.remove(2); ctx.remove(2) }
             val shot = AgentEngine.screenB64(this, AgentEngine.VISION_MAX_W)
             if (shot == null) { Thread.sleep(2000); continue }
@@ -1834,12 +1910,8 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 // 拍摄/创作页对签到任务是高危路径：一旦进入倒计时或编辑页，很容易连续操作到发布。
-                val creationIntent = Regex("拍摄|录像|发视频|发布|开直播|录屏").containsMatchIn(userText)
-                val creationSignals = listOf(
-                    "选择音乐", "切换到前置摄像头", "开始拍摄", "停止拍摄", "分段拍",
-                    "灵感跟拍", "美颜", "滤镜", "倒计时拍", "视频编辑", "发布"
-                ).count { screenDump.contains(it) }
-                if (!creationIntent && creationSignals >= 2) {
+                // 判定逻辑收拢到 PageGuard.isUnintendedCreationPage，供主循环与 AgentEngine 点击链共用
+                if (PageGuard.isUnintendedCreationPage(userText, screenDump)) {
                     val discardResult = listOf("不保存返回", "不保存", "丢弃")
                         .firstNotNullOfOrNull { label ->
                             AssistantAccessibilityService.instance?.clickText(label)
@@ -1849,7 +1921,7 @@ class MainActivity : AppCompatActivity() {
                         android.util.Log.i("AIButler", "AGLM left creation page via discard exit")
                     } else {
                         AssistantAccessibilityService.instance?.pressBack()
-                        android.util.Log.i("AIButler", "AGLM force back from creation page, signals=$creationSignals")
+                        android.util.Log.i("AIButler", "AGLM force back from creation page (PageGuard.isUnintendedCreationPage)")
                     }
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg("system", "🛑 已离开误入的拍摄/创作页，正在返回任务路径。"))
@@ -1907,6 +1979,43 @@ class MainActivity : AppCompatActivity() {
                         )
                     })
                     Thread.sleep(1200)
+                    continue
+                }
+                // 🪟 通用阻塞性弹窗：特征命中且有安全关闭控件时直接代点，不再只依赖模型遵守「弹窗优先」
+                val popupPlan = PopupGuard.plan(userText, screenDump)
+                if (popupPlan != null) {
+                    val closed = AssistantAccessibilityService.instance?.clickText(popupPlan.closeLabel)
+                        ?.startsWith("已") == true
+                    android.util.Log.i(
+                        "AIButler",
+                        "AGLM popup-guard: ${popupPlan.reason}, label=${popupPlan.closeLabel}, closed=$closed"
+                    )
+                    runOnUiThread {
+                        adapter.add(
+                            ChatAdapter.Msg(
+                                "system",
+                                "🪟 检测到阻塞性弹窗（${popupPlan.reason}），已自动点击「${popupPlan.closeLabel}」" +
+                                    if (closed) "" else "（未点中，交还视觉脑处理）"
+                            )
+                        )
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    // 点没点中要如实告诉模型：明明没关掉却说「已关闭」，模型下轮看到弹窗还在会困惑（体检 P1-9）
+                    ctx.add(JsonObject().apply {
+                        addProperty("role", "user")
+                        addProperty(
+                            "content",
+                            if (closed)
+                                "🛑 系统提示：刚才页面被${popupPlan.reason}挡住，系统已自动点击「${popupPlan.closeLabel}」关闭。" +
+                                    "弹窗不是任务进度，别把弹窗当成完成证据。关闭后请重新读屏，继续找与「$userText」直接相关的入口；" +
+                                    "绝不要点击弹窗里的添加/安装/立即更新/去开启。"
+                            else
+                                "🪟 系统提示：页面被${popupPlan.reason}挡住，系统尝试点「${popupPlan.closeLabel}」但没点中。" +
+                                    "请你自己点击弹窗上的关闭/跳过/以后再说/我知道了；实在找不到就 do(action=\"Back\")。" +
+                                    "绝不要点击弹窗里的添加/安装/立即更新/去开启，也别把弹窗当成完成证据。"
+                        )
+                    })
+                    Thread.sleep(1000)
                     continue
                 }
                 screenDump.lineSequence().firstOrNull { line -> line.contains("页面内容:") }
@@ -2602,6 +2711,19 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 parseFails = 0
+                if (res.message == "__POPUP_BLOCK__") {
+                    // 弹窗硬关闭层（AgentEngine 点击链）的拦截：res.info 与点击事实一致，如实转述即可；
+                    // 不进 jumpBlockStreak——弹窗不是「跳转入口」，连拦也不该代按返回（体检 P1-9）
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", res.info))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    ctx.add(JsonObject().apply {
+                        addProperty("role", "user")
+                        addProperty("content", res.info)
+                    })
+                    continue
+                }
                 if (res.message == "__JUMP_BLOCK__") {
                     jumpBlockStreak++
                     runOnUiThread {
@@ -2810,6 +2932,7 @@ class MainActivity : AppCompatActivity() {
                     historySnapshot = history.deepCopy()
                 )
                 runOnUiThread {
+                    adapter.settleVision("⏸️ 任务已暂停")
                     adapter.add(ChatAdapter.Msg("system", "⏸️ 已暂停。想继续就说「继续」，想改主意直接说新的指令。"))
                     rv.scrollToPosition(adapter.items.size - 1)
                 }
@@ -2845,6 +2968,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 先把结果立刻显示给用户；经验总结要再跑一次大模型调用，放到后台，完成后再补充显示
                 runOnUiThread {
+                    // 截图状态行先改口（已完成/已停止），最终回复紧随其后
+                    adapter.settleVision(if (judgedSuccess) "✅ 已完成任务" else "⛔ 任务已停止")
                     adapter.add(ChatAdapter.Msg("assistant", reply))
                     rv.scrollToPosition(adapter.items.size - 1)
                 }
@@ -2889,6 +3014,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             android.util.Log.e("AIButler", "AGLM 异常 class=${e.javaClass.name} message=${e.message}", e)
             runOnUiThread {
+                adapter.settleVision("⛔ 任务已停止")
                 adapter.add(ChatAdapter.Msg("system", "❌ AutoGLM 出错了：${e.message}"))
                 rv.scrollToPosition(adapter.items.size - 1)
             }
@@ -3324,10 +3450,17 @@ class MainActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startVoice()
-        if (requestCode == 300) requestCapture()
+        // 用户拒绝了就不强行往下拉下一个授权框，尊重用户选择（体检 P2-9）
+        if (requestCode == 300) {
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                requestCapture()
+            }
+        }
         if (requestCode == 400) {
             // 运行时权限授权完毕，继续检查截图
-            if (!CaptureService.isActive()) requestCapture()
+            if (grantResults.isEmpty() || grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                if (!CaptureService.isActive()) requestCapture()
+            }
         }
     }
 

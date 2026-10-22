@@ -15,7 +15,7 @@ class VisualFeatureLibrary(context: Context) {
     private val imageDir = File(root, "images").apply { mkdirs() }
     private val indexFile = File(root, "index.json")
 
-    fun all(): List<VisualSample> = synchronized(this) {
+    fun all(): List<VisualSample> = synchronized(LOCK) {
         load().filter { it.enabled }
     }
 
@@ -37,7 +37,7 @@ class VisualFeatureLibrary(context: Context) {
             phash = vf.phash,
             colorFeature = vf.colorFeature
         )
-        synchronized(this) {
+        synchronized(LOCK) {
             val items = load().toMutableList()
             items.add(sample)
             while (items.size > MAX_SAMPLES) {
@@ -52,7 +52,7 @@ class VisualFeatureLibrary(context: Context) {
     }
 
     fun delete(sampleId: String) {
-        synchronized(this) {
+        synchronized(LOCK) {
             val items = load().toMutableList()
             val target = items.firstOrNull { it.id == sampleId } ?: return
             File(target.imagePath).delete()
@@ -64,7 +64,7 @@ class VisualFeatureLibrary(context: Context) {
     fun rename(sampleId: String, newLabel: String): Boolean {
         val cleanLabel = newLabel.trim()
         if (cleanLabel.isBlank()) return false
-        synchronized(this) {
+        synchronized(LOCK) {
             val items = load().toMutableList()
             val index = items.indexOfFirst { it.id == sampleId }
             if (index < 0) return false
@@ -75,7 +75,7 @@ class VisualFeatureLibrary(context: Context) {
     }
 
     fun clear() {
-        synchronized(this) {
+        synchronized(LOCK) {
             load().forEach { File(it.imagePath).delete() }
             indexFile.delete()
         }
@@ -148,7 +148,7 @@ class VisualFeatureLibrary(context: Context) {
     /** 本帧所有命中合并成一次 load→改→save：逐 rect 各写一遍 index.json 是 agent 循环内的 I/O 放大 */
     private fun recordMatches(sampleIds: List<String>) {
         if (sampleIds.isEmpty()) return
-        synchronized(this) {
+        synchronized(LOCK) {
             val counts = sampleIds.groupingBy { it }.eachCount()
             val items = load().toMutableList()
             val now = System.currentTimeMillis()
@@ -188,6 +188,10 @@ class VisualFeatureLibrary(context: Context) {
         private const val MAX_SAMPLES = 500
         private const val MIN_WIDTH = 20
         private const val MIN_HEIGHT = 20
+
+        // 类级静态锁：本类在 AgentEngine / VisualSampleController / VisualSampleListDialog
+        // 各有实例，实例锁互不相干，agent 线程与 UI 线程并发 load→save 会互相覆盖丢样本（体检 P1-5）
+        private val LOCK = Any()
 
         fun rectKey(rect: Rect): String = "${rect.left},${rect.top},${rect.right},${rect.bottom}"
     }

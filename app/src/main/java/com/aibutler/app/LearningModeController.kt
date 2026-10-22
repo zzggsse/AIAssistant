@@ -66,7 +66,6 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         targetLocked = lockTarget
         synchronized(stepsLock) { recordedSteps.clear() }
         clearPendingSteps()
-        synchronized(stepsLock) { recordedSteps.clear() }
         recording = false
         showOverlay()
     }
@@ -75,6 +74,8 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         val hadSteps = synchronized(stepsLock) { recordedSteps.isNotEmpty() }
         recording = false
         overlayVisible = false
+        // 清掉待提交的输入步骤：不然 stop→takeRecording 之后幽灵步骤还会再入列表（体检 P2-13）
+        clearPendingSteps()
         hideOverlay()
         return hadSteps
     }
@@ -184,7 +185,7 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         }
 
         val size = service.realScreenSize()
-        val step = pendingInputStep?.copy(actionLabel = text.take(80)) ?: LearningStep(
+        val newStep = LearningStep(
             packageName = eventPackage,
             sourceFingerprint = service.currentPageFingerprint().first,
             actionType = "input_text",
@@ -194,6 +195,14 @@ class LearningModeController(private val service: AssistantAccessibilityService)
             actionX = ((rect.exactCenterX() / size.first) * 999).roundToInt(),
             actionY = ((rect.exactCenterY() / size.second) * 999).roundToInt()
         )
+        // 只合并同一个输入框的连续输入：切到另一个框（包名/控件/坐标变了）必须开新步骤——
+        // 旧逻辑无条件 copy 旧步骤，第二框的文字会带着第一框的 resourceId/坐标回放输错位置（体检 P2-1）
+        val sameField = pendingInputStep?.let {
+            it.resourceId == newStep.resourceId && it.packageName == newStep.packageName &&
+                kotlin.math.abs(it.actionX - newStep.actionX) <= 2 &&
+                kotlin.math.abs(it.actionY - newStep.actionY) <= 2
+        } == true
+        val step = if (sameField) pendingInputStep!!.copy(actionLabel = text.take(80)) else newStep
         pendingInputStep = step
         pendingInputRunnable?.let(mainHandler::removeCallbacks)
         val runnable = Runnable {

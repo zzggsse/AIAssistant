@@ -70,9 +70,15 @@ object VisualFeatureEncoder {
         return count
     }
 
+    /** cos 表只与 DCT_SIZE 有关：静态缓存，agent 循环高频 extract 不再每次重建（体检 P2-14） */
+    private val cosTableCache: Array<DoubleArray> by lazy {
+        val size = DCT_SIZE
+        Array(size) { x -> DoubleArray(size) { u -> cos((2.0 * x + 1.0) * u * Math.PI / (2.0 * size)) } }
+    }
+
     private fun dct2d(input: DoubleArray): DoubleArray {
         val size = DCT_SIZE
-        val cosTable = Array(size) { x -> DoubleArray(size) { u -> cos((2.0 * x + 1.0) * u * Math.PI / (2.0 * size)) } }
+        val cosTable = cosTableCache
         val temp = DoubleArray(size * size)
         val output = DoubleArray(size * size)
         for (y in 0 until size) {

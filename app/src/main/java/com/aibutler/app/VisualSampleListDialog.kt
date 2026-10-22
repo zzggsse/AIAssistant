@@ -103,7 +103,9 @@ object VisualSampleListDialog {
             }
             scaleType = ImageView.ScaleType.CENTER_CROP
             val bmp = BitmapFactory.decodeFile(sample.imagePath)
-            if (bmp != null) { setImageBitmap(bmp); bmp.recycle() }
+            // 绝不能 setImageBitmap 后立刻 recycle：首帧绘制发生在 dialog show 之后，
+            // 那时会读已回收的 bitmap 直接崩（Canvas: trying to use a recycled bitmap）
+            if (bmp != null) setImageBitmap(bmp)
             background = ContextCompat.getDrawable(activity, R.drawable.bg_input_field)
             clipToOutline = true
         }

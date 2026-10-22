@@ -14,27 +14,73 @@
         android:layout_marginEnd="0dp"
         android:orientation="vertical"
         android:background="@drawable/bg_bubble_think"
-        android:paddingStart="10dp"
-        android:paddingEnd="10dp"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
         android:paddingTop="8dp"
         android:paddingBottom="8dp">
 
-        <TextView
-            android:id="@+id/tvVisionCaption"
+        <!-- 可点击的状态行：平时只显示"任务进行中…/已完成任务"，点开才看到截图（样式对齐思考过程气泡） -->
+        <LinearLayout
+            android:id="@+id/visionHeader"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textSize="11sp"
-            android:textStyle="bold"
-            android:textColor="@color/colorSystemText" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="?attr/selectableItemBackground"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:clickable="true"
+            android:focusable="true">
 
-        <ImageView
-            android:id="@+id/ivVision"
+            <TextView
+                android:id="@+id/tvVisionHeader"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="截图思考过程"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="@color/colorTextSecondary" />
+
+            <ImageView
+                android:id="@+id/ivVisionArrow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:src="@drawable/ic_chevron_down"
+                android:tint="@color/colorPrimary"
+                android:importantForAccessibility="yes"
+                android:contentDescription="展开或收起截图思考过程"
+                android:paddingStart="8dp"
+                android:paddingEnd="0dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp" />
+        </LinearLayout>
+
+        <!-- 折叠体：截图和说明文字，默认 GONE，点头部展开 -->
+        <LinearLayout
+            android:id="@+id/visionBody"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:adjustViewBounds="true"
-            android:maxHeight="240dp"
-            android:scaleType="fitStart"
-            android:contentDescription="发给AI识别的屏幕截图" />
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tvVisionCaption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="@color/colorSystemText" />
+
+            <ImageView
+                android:id="@+id/ivVision"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:adjustViewBounds="true"
+                android:maxHeight="240dp"
+                android:scaleType="fitStart"
+                android:contentDescription="发给AI识别的屏幕截图" />
+        </LinearLayout>
     </LinearLayout>
 </FrameLayout>

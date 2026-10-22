@@ -125,6 +125,22 @@ object PageGuard {
     fun safeAdExitLabel(screenDump: String): String? =
         ExitMemory.visibleButtons(screenDump).firstOrNull()?.label
 
+    /** 拍摄/创作页的「不保存」退出按钮，按优先级排列 */
+    val CREATION_DISCARD_LABELS = listOf("不保存返回", "不保存", "丢弃")
+
+    /**
+     * 拍摄/创作页对非创作任务是高危路径：一旦进入倒计时或编辑页，很容易连续操作到发布。
+     * 用户任务本身要拍摄/发布/直播时不拦（那是正当目标）。
+     */
+    fun isUnintendedCreationPage(task: String, screenDump: String): Boolean {
+        if (Regex("拍摄|录像|发视频|发布|开直播|录屏").containsMatchIn(normalize(task))) return false
+        val signals = listOf(
+            "选择音乐", "切换到前置摄像头", "开始拍摄", "停止拍摄", "分段拍",
+            "灵感跟拍", "美颜", "滤镜", "倒计时拍", "视频编辑", "发布"
+        )
+        return signals.count { screenDump.contains(it) } >= 2
+    }
+
     private fun isCommerceTask(task: String): Boolean {
         val text = normalize(task)
         if (Regex("不要|别|禁止|避免|不得").containsMatchIn(text)) {
@@ -145,6 +161,8 @@ object PageGuard {
     ).firstOrNull { text.contains(it) }
 
     private fun clickableLabels(screenDump: String): List<String> =
+        // 注意：这里的 `[^\[]` 只兼容原始 dump——Set-of-Marks 编号版（`可点击: [N] 文字 [x,y]`）
+        // 会让匹配全失败。所有调用方都必须传原始 screenDump，勿传 markedDump（体检 P2-19）
         Regex("可点击:\\s*([^\\[\\n]+?)\\s*\\[")
             .findAll(screenDump)
             .map { it.groupValues[1].substringBefore("{").trim() }

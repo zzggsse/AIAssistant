@@ -57,14 +57,6 @@ class NotificationCatcher : NotificationListenerService() {
         }
 
         fun snapshot(limit: Int): List<Notif> = synchronized(recent) { recent.takeLast(limit) }
-
-        fun add(context: Context, notif: Notif) {
-            synchronized(recent) {
-                recent.addLast(notif)
-                while (recent.size > MAX_CACHED) recent.removeFirst()
-            }
-            persist(context)
-        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {

@@ -94,13 +94,13 @@ object ExitMemory {
     fun scoreButton(label: String): Int {
         val text = label.replace(Regex("\\s+"), "")
         if (Regex(
-                "继续观看|继续浏览|继续玩|再看|去下载|下载|安装|试玩|了解详情|查看详情|立即抢购|立即领取|去体验|打开|更多|分享|邀请|注册|登录",
+                "继续观看|继续浏览|继续玩|再看|去下载|下载|安装|试玩|了解详情|查看详情|了解更多|立即抢购|立即领取|点击领取|立即体验|去体验|去完成|去看看|去逛逛|开心收下|打开|更多|分享|邀请|注册|登录",
                 RegexOption.IGNORE_CASE
             ).containsMatchIn(text)
         ) return -1
         return when {
-            Regex("放弃奖励|放弃|不再观看|不感兴趣|残忍离开|残忍退出|坚持退出|退出|返回").containsMatchIn(text) -> 500
-            Regex("以后再说|暂不|下次再说|跳过|关闭|取消|知道了|我知道了").containsMatchIn(text) -> 400
+            Regex("放弃奖励|放弃|不再观看|不感兴趣|残忍离开|残忍退出|残忍拒绝|坚持退出|狠心离开|狠心放弃|不玩了|暂离|退出|返回").containsMatchIn(text) -> 500
+            Regex("以后再说|暂不|下次再说|跳过|关闭|取消|知道了|我知道了|拒绝|不再提醒|不再提示").containsMatchIn(text) -> 400
             else -> 0
         }
     }

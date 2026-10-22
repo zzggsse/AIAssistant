@@ -32,11 +32,11 @@ class CaptureService : Service() {
     companion object {
         private var projection: MediaProjection? = null
         private var vdisplay: VirtualDisplay? = null
-        private var reader: ImageReader? = null
+        @Volatile private var reader: ImageReader? = null
         private var width = 0
         private var height = 0
         private var dpi = 0
-        private var lastFrame: Bitmap? = null
+        @Volatile private var lastFrame: Bitmap? = null
         private val lastFrameLock = Any()
         private var frameThread: HandlerThread? = null
         private var frameHandler: Handler? = null
@@ -100,14 +100,23 @@ class CaptureService : Service() {
 
         private fun cacheFrame(frame: Bitmap?) {
             if (frame == null) return
-            val cached = frame.copy(Bitmap.Config.ARGB_8888, false)
-            if (cached != null) {
-                synchronized(lastFrameLock) {
-                    lastFrame?.recycle()
-                    lastFrame = cached
+            try {
+                // copy 抛 OOM 时也不能漏掉 frame.recycle()，否则低内存设备上雪上加霜（体检 P2-5）
+                val cached = try {
+                    frame.copy(Bitmap.Config.ARGB_8888, false)
+                } catch (e: Throwable) {
+                    android.util.Log.w("AIButler", "cacheFrame copy failed: ${e.message}")
+                    null
                 }
+                if (cached != null) {
+                    synchronized(lastFrameLock) {
+                        lastFrame?.recycle()
+                        lastFrame = cached
+                    }
+                }
+            } finally {
+                frame.recycle()
             }
-            frame.recycle()
         }
 
         private fun snapshot(): Bitmap? {

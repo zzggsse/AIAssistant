@@ -159,6 +159,11 @@ object PathMemoryStore {
         if (path.targetAppName.isNotBlank()) {
             DeviceTools.openApp(activity, path.targetAppName, waitMs = 350L)
             waitForPackage(svc, path.targetPackage, 1800L)
+            // 等待超时后包名仍不符就放弃：在错误页面上按文字自适应会乱点同名按钮（体检 P2-2）
+            if (path.targetPackage.isNotBlank() && svc.currentPackage() != path.targetPackage) {
+                Log.w(TAG, "回放放弃：未能在超时内到达目标应用（当前=${svc.currentPackage()}）")
+                return ReplayResult(false, 0, -1, "没能打开目标应用（${path.targetAppName}），已放弃回放")
+            }
         }
 
         stepLoop@ for ((idx, step) in path.steps.withIndex()) {
@@ -210,8 +215,12 @@ object PathMemoryStore {
                         return ReplayResult(false, idx, idx, "第${idx + 1}步按返回失败")
                     }
                 }
-                "swipe_up" -> svc.scroll(true)
-                "swipe_down" -> svc.scroll(false)
+                "swipe_up" -> {
+                    if (svc.scroll(true) != true) return ReplayResult(false, idx, idx, "第${idx + 1}步滑动失败")
+                }
+                "swipe_down" -> {
+                    if (svc.scroll(false) != true) return ReplayResult(false, idx, idx, "第${idx + 1}步滑动失败")
+                }
             }
 
             // 等页面稳定后再校验目标指纹

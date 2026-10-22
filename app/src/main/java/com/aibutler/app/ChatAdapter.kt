@@ -18,7 +18,11 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         var collapsed: Boolean = false,
         val imagePath: String? = null,
         var likeCount: Int = 0,
-        var liked: Boolean = false
+        var liked: Boolean = false,
+        /** vision 专用：所属任务是否正在执行（true=进行中）。任务结束或重新载入会话时置 false */
+        var running: Boolean = false,
+        /** vision 专用：任务结束时的状态文案（✅ 已完成任务 / ⏸️ 任务已暂停 / ⛔ 任务已停止） */
+        var statusNote: String? = null
     )
 
     companion object {
@@ -31,6 +35,8 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         private const val MAX_THINK_CHARS = 4000
         /** 视觉消息图片按目标边长降采样的上限（原始截图 2000+px，直接解码既慢又吃内存） */
         private const val VISION_MAX_DIM = 1080
+        /** 从截图说明里抠出"第N轮"，折叠状态行上让用户知道这是哪一轮的截图 */
+        private val VISION_ROUND = Regex("第\\d+轮")
         // 界面被系统销毁重建后聊天内容仍在（干活线程与新界面共享同一份列表）
         val sharedItems = ArrayList<Msg>()
         private const val SAVE_DELAY_MS = 220L
@@ -79,13 +85,35 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
 
     /**
      * 保留真实发给模型的截图，用户能在手机端核对AI这一轮到底看到了什么。
+     * 截图默认收起，只显示一行"任务进行中…"状态（对话里连续几十轮截图时不再把列表撑爆），
+     * 点状态行才展开看到截图；任务结束后由 settleVision 统一改成终态文案。
      */
     fun addVision(text: String, imagePath: String) {
-        val msg = Msg("vision", text, imagePath = imagePath)
+        val msg = Msg("vision", text, collapsed = true, imagePath = imagePath, running = true)
         items.add(msg)
         scheduleSave()
         notifyDataSetChanged()
         onItemsChanged?.invoke()
+    }
+
+    /**
+     * 任务结束（完成/暂停/停止/异常）时由任务线程调用：把本任务所有"进行中"的截图状态行改成终态。
+     * statusNote 例如"✅ 已完成任务"、"⏸️ 任务已暂停"、"⛔ 任务已停止"。
+     */
+    fun settleVision(statusNote: String) {
+        var changed = false
+        for (m in items) {
+            if (m.role == "vision" && m.running) {
+                m.running = false
+                m.statusNote = statusNote
+                changed = true
+            }
+        }
+        if (changed) {
+            scheduleSave()
+            notifyDataSetChanged()
+            onItemsChanged?.invoke()
+        }
     }
 
     fun loadPersisted() {
@@ -137,6 +165,14 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
     private fun replaceItems(newItems: List<Msg>) {
         items.clear()
         items.addAll(newItems)
+        // 重新载入的会话里截图一律折叠收起：running 是"任务正在跑"的瞬时状态，落盘恢复后不可能还在跑
+        // （App 半路被杀的残留也一并纠正）；旧版本存的截图没有折叠概念，统一收起避免历史会话一打开全是图
+        for (m in items) {
+            if (m.role == "vision") {
+                m.running = false
+                m.collapsed = true
+            }
+        }
         notifyDataSetChanged()
         onItemsChanged?.invoke()
     }
@@ -202,9 +238,29 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
             }
         }
         if (holder.viewType == TYPE_VISION) {
-            holder.ivVision?.setImageBitmap(msg.imagePath?.let { path ->
-                decodeSampled(path, VISION_MAX_DIM)
-            })
+            val round = VISION_ROUND.find(msg.text)?.value?.let { " · $it" } ?: ""
+            holder.tvVisionHeader?.text = if (msg.running) "🔄 任务进行中…$round（点开查看截图思考过程）"
+            else "${msg.statusNote ?: "✅ 已完成任务"}$round（点开查看截图思考过程）"
+            val expanded = !msg.collapsed
+            holder.visionBody?.visibility = if (expanded) View.VISIBLE else View.GONE
+            holder.tvVisionCaption?.text = msg.text
+            holder.ivVisionArrow?.rotation = if (msg.collapsed) -90f else 0f
+            holder.ivVisionArrow?.contentDescription =
+                if (msg.collapsed) "展开截图思考过程" else "收起截图思考过程"
+            val toggle = View.OnClickListener {
+                msg.collapsed = !msg.collapsed
+                notifyItemChanged(position)
+            }
+            holder.visionHeader?.setOnClickListener(toggle)
+            holder.tvVisionHeader?.setOnClickListener(toggle)
+            // 只在展开时才解码截图；折叠态把旧图清掉，几十轮历史截图不再常驻内存
+            if (expanded) {
+                holder.ivVision?.setImageBitmap(msg.imagePath?.let { path ->
+                    decodeSampled(path, VISION_MAX_DIM)
+                })
+            } else {
+                holder.ivVision?.setImageDrawable(null)
+            }
         }
     }
 
@@ -237,6 +293,11 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         val thinkHeader: View? = root.findViewById(R.id.thinkHeader)
         val tvThinkBody: TextView? = root.findViewById(R.id.tvThinkBody)
         val ivThinkArrow: android.widget.ImageView? = root.findViewById(R.id.ivThinkArrow)
+        val tvVisionHeader: TextView? = root.findViewById(R.id.tvVisionHeader)
+        val visionHeader: View? = root.findViewById(R.id.visionHeader)
+        val visionBody: View? = root.findViewById(R.id.visionBody)
+        val tvVisionCaption: TextView? = root.findViewById(R.id.tvVisionCaption)
+        val ivVisionArrow: android.widget.ImageView? = root.findViewById(R.id.ivVisionArrow)
         val ivVision: android.widget.ImageView? = root.findViewById(R.id.ivVision)
         val likeBurst: LikeBurstView? = root.findViewById(R.id.likeBurst)
 

@@ -168,6 +168,9 @@ class AssistantAccessibilityService : AccessibilityService() {
         return try {
             var remaining = graceMs
             while (remaining > 0 && answer == null) {
+                // 用户点了停止（暂停请求置位）立即打断等待：否则任务线程要干等满宽限期，
+                // 期间发出的新指令得排队等最多 2 分钟（体检 P1-4）
+                if (TaskControlBus.pauseRequested) break
                 val slice = if (remaining > 200) 200 else remaining
                 if (latch.await(slice, TimeUnit.MILLISECONDS)) break
                 remaining -= slice
@@ -746,6 +749,12 @@ class AssistantAccessibilityService : AccessibilityService() {
         successOverlayRoot = null
         successConfirmLatch?.countDown()
         successConfirmLatch = null
+        // SessionAsk 询问卡片同样要收尾：等待线程不能干等满宽限期，残留的悬浮卡片
+        // 也不能在服务销毁后还挡在屏幕上（体检 P1-3）
+        sessionAskLatch?.countDown()
+        sessionAskLatch = null
+        sessionAskOverlayRoot?.let(::removeFromOverlay)
+        sessionAskOverlayRoot = null
         super.onDestroy()
     }
 
@@ -1252,7 +1261,7 @@ class AssistantAccessibilityService : AccessibilityService() {
         return dispatchGesture(gesture, null, null)
     }
 
-    fun scroll(down: Boolean): String {
+    fun scroll(down: Boolean): Boolean {
         val (screenWidth, screenHeight) = realScreenSize()
         val cx = screenWidth / 2f
         val from = if (down) screenHeight * 0.70f else screenHeight * 0.35f
@@ -1261,8 +1270,7 @@ class AssistantAccessibilityService : AccessibilityService() {
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 350))
             .build()
-        dispatchGesture(gesture, null, null)
-        return if (down) "已向下滑动屏幕" else "已向上滑动屏幕"
+        return dispatchGesture(gesture, null, null)
     }
 
     /** 左右滑动：right=true 表示内容向右移（等价于看左边的Tab/上一张图） */

@@ -87,7 +87,12 @@
         <service
             android:name=".AgentKeepAliveService"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="specialUse">
+            <!-- Android 14+ 要求 specialUse FGS 声明用途，缺了这个 startForeground 可能直接抛异常（体检 P2-11） -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="任务执行期间保活，防止长任务被系统回收" />
+        </service>
 
         <service
             android:name=".NotificationCatcher"

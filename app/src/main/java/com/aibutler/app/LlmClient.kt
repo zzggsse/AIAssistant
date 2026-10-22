@@ -30,6 +30,23 @@ object LlmClient {
         throw LlmException("接口返回不是合法 JSON：${text.take(200)}")
     }
 
+    // 国内可直连的模型服务域名；不在此列的域名连不上时提示可能需要梯子
+    private val domesticHosts = listOf(
+        "open.bigmodel.cn", "api.deepseek.com", "api.moonshot.cn",
+        "dashscope.aliyuncs.com", "api.siliconflow.cn"
+    )
+
+    /** 连接类失败转可读提示：国外端点明确告诉用户可切国内厂商，而不是裸 IOException */
+    private fun friendlyConnectError(e: Exception, url: String): LlmException {
+        val host = runCatching { URL(url).host }.getOrNull().orEmpty()
+        val domestic = domesticHosts.any { host == it || host.endsWith(".$it") }
+        return if (domestic || host.isBlank()) {
+            LlmException("连不上模型服务${if (host.isBlank()) "" else "（$host）"}，请检查网络后重试")
+        } else {
+            LlmException("连不上 $host：该厂商可能需要梯子。可在设置切到「智谱 GLM / DeepSeek / 通义」等国内厂商直连，同一把智谱 Key 就能跑 glm-4.6")
+        }
+    }
+
     // ========== 流式响应（SSE） ==========
 
     /**
@@ -86,12 +103,13 @@ object LlmClient {
             data class ToolAccumulator(var id: String = "", var name: String = "", var args: StringBuilder = StringBuilder())
             val toolAccum = LinkedHashMap<Int, ToolAccumulator>()
             var finishReason = ""
+            var sawDone = false
 
             while (true) {
                 val line = reader.readLine() ?: break
                 if (!line.startsWith("data: ")) continue
                 val data = line.removePrefix("data: ").trim()
-                if (data == "[DONE]") break
+                if (data == "[DONE]") { sawDone = true; break }
                 try {
                     val chunk = JsonParser.parseString(data).asJsonObject
                     val choice = chunk.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject ?: continue
@@ -120,6 +138,20 @@ object LlmClient {
                 }
             }
 
+            // 服务端中途断流（既无 [DONE] 也无 finish_reason）时内容往往是半截：
+            // 工具参数 JSON 不完整会让下游解析失败，空响应也没有意义——按失败抛出，
+            // 上层（MainActivity 的 STREAM_FALLBACK）会自动降级非流式重试
+            val brokenArgs = toolAccum.values.any { acc ->
+                acc.name.isNotBlank() && acc.args.isNotBlank() && runCatching {
+                    JsonParser.parseString(acc.args.toString())
+                }.isFailure
+            }
+            if (brokenArgs || (!sawDone && finishReason.isBlank() &&
+                    contentBuilder.isBlank() && toolAccum.isEmpty())
+            ) {
+                throw LlmException("流式响应提前中断，内容可能不完整，自动改用非流式重试")
+            }
+
             val toolCalls = toolAccum.values
                 .filter { it.name.isNotBlank() }
                 .map { ToolCall(it.id.ifBlank { "call_${System.nanoTime()}" }, it.name, it.args.toString().ifBlank { "{}" }) }
@@ -146,6 +178,8 @@ object LlmClient {
             return Result(contentBuilder.toString(), toolCalls, rawMessage)
         } catch (e: java.net.SocketTimeoutException) {
             throw LlmException("流式请求超时，请检查网络或稍后重试")
+        } catch (e: java.io.IOException) {
+            throw friendlyConnectError(e, url)
         } finally {
             conn?.disconnect()
         }
@@ -258,6 +292,8 @@ object LlmClient {
                 }
                 return Result(content, calls, msg ?: JsonObject().apply { addProperty("role", "assistant") })
             }
+        } catch (e: java.io.IOException) {
+            throw friendlyConnectError(e, url)
         } finally {
             conn?.disconnect()
         }
@@ -359,6 +395,8 @@ object LlmClient {
                     continue
                 }
                 throw LlmException("请求超时（已重试1次）：网络较慢或智谱服务繁忙，请稍后再试")
+            } catch (e: java.io.IOException) {
+                throw friendlyConnectError(e, url)
             } finally {
                 conn?.disconnect()
             }
@@ -431,6 +469,8 @@ object LlmClient {
                     continue
                 }
                 throw LlmException("视觉请求超时（已重试${attempt - 1}次），请稍后再试")
+            } catch (e: java.io.IOException) {
+                throw friendlyConnectError(e, url)
             } finally {
                 conn?.disconnect()
             }

@@ -58,18 +58,41 @@ object ContextCompressor {
         userMsgIndices.firstOrNull()?.let { pinnedIndices.add(it) }
         userMsgIndices.lastOrNull()?.let { pinnedIndices.add(it) }
 
-        // 3. 从尾部往前收集消息直到用掉预算的 70%（留 30% 给 pinned + tool截断余量）
+        // 3. 划分「原子轮」：assistant(tool_calls) 与它后面的全部 tool 结果必须同进同退——
+        //    如果压缩断点落在这对消息中间，发给接口就违反「tool_calls 必须紧跟对应 tool 结果」
+        //    的协议约束，直接 400（长任务历史膨胀时高概率触发，曾是 1214 报错的根因之一）
+        val rounds = ArrayList<List<Int>>()
+        var idx = 0
+        while (idx < history.size()) {
+            val o = history.get(idx).asJsonObject
+            val group = ArrayList<Int>()
+            group.add(idx)
+            if (o.get("role")?.asString == "assistant" && o.has("tool_calls")) {
+                var j = idx + 1
+                while (j < history.size() &&
+                    history.get(j).asJsonObject.get("role")?.asString == TOOL_ROLE
+                ) {
+                    group.add(j)
+                    j++
+                }
+            }
+            rounds.add(group)
+            idx += group.size
+        }
+
+        // 4. 从尾部往前按「轮」收集直到用掉预算的 70%（留 30% 给 pinned + tool截断余量）
         val keepFromEnd = mutableSetOf<Int>()
         var budget = (budgetChars * 0.7).toInt()
-        for (i in history.size() - 1 downTo 0) {
-            if (i in pinnedIndices) continue
-            val chars = msgChars(history.get(i).asJsonObject)
+        for (r in rounds.size - 1 downTo 0) {
+            val round = rounds[r]
+            if (round.any { it in pinnedIndices }) continue
+            val chars = round.sumOf { msgChars(history.get(it).asJsonObject) }
             if (budget - chars < 0 && keepFromEnd.isNotEmpty()) break
-            keepFromEnd.add(i)
+            keepFromEnd.addAll(round)
             budget -= chars
         }
 
-        // 4. 构建压缩后的历史
+        // 5. 构建压缩后的历史
         val result = JsonArray()
         for (i in 0 until history.size()) {
             val keep = i in pinnedIndices || i in keepFromEnd

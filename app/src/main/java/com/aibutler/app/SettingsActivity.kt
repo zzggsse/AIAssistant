@@ -300,7 +300,14 @@ class SettingsActivity : AppCompatActivity() {
             text = "查看错误日志"
             setOnClickListener {
                 val logFile = CrashLogger.logFile(this@SettingsActivity)
-                val content = if (logFile.exists()) logFile.readText().take(4000) else "暂无错误日志"
+                // 只读前 4KB：日志文件上限 8MB，整文件 readText() 会卡主线程（体检 P2-16）
+                val content = if (logFile.exists()) {
+                    logFile.inputStream().use { input ->
+                        val buf = ByteArray(4096)
+                        val n = input.read(buf)
+                        if (n <= 0) "（空日志）" else String(buf, 0, n, Charsets.UTF_8)
+                    }
+                } else "暂无错误日志"
                 androidx.appcompat.app.AlertDialog.Builder(this@SettingsActivity)
                     .setTitle("错误日志（最近部分）\n${CrashLogger.deviceInfo()}")
                     .setMessage(content)

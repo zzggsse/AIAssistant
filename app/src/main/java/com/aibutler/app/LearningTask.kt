@@ -117,6 +117,16 @@ object LearningTaskStore {
 
         if (task.targetPackage.isNotBlank() && service.currentPackage() != task.targetPackage) {
             openLearningTarget(activity, task)
+            // 起步前必须确认到了目标应用：不然在错误页面上按文字自适应，
+            // 同名按钮（如"搜索"）会被乱点（体检 P2-2）
+            var waited = 0
+            while (service.currentPackage() != task.targetPackage && waited < 3000) {
+                Thread.sleep(200)
+                waited += 200
+            }
+            if (service.currentPackage() != task.targetPackage) {
+                return LearningReplayResult(false, 0, "没能打开目标应用，已停止回放；请确认应用已安装后重试")
+            }
         }
 
         task.steps.forEachIndexed { index, step ->
@@ -188,8 +198,15 @@ object LearningTaskStore {
                     if (!service.pressBack()) return LearningReplayResult(false, index, "第${index + 1}步返回失败")
                     AgentEngine.waitForActionSettle("Back", before.first)
                 }
-                "swipe_down" -> service.scroll(true)
-                "swipe_up" -> service.scroll(false)
+                "swipe_down" -> {
+                    if (!service.scroll(true)) return LearningReplayResult(false, index, "第${index + 1}步滑动失败")
+                    // 与 tap/back 一致地等页面稳定（体检 P2-12）
+                    AgentEngine.waitForActionSettle("Swipe", before.first)
+                }
+                "swipe_up" -> {
+                    if (!service.scroll(false)) return LearningReplayResult(false, index, "第${index + 1}步滑动失败")
+                    AgentEngine.waitForActionSettle("Swipe", before.first)
+                }
                 else -> return LearningReplayResult(false, index, "第${index + 1}步动作不支持")
             }
         }

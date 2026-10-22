@@ -60,10 +60,10 @@ object NotesStore {
         val notes = load(c)
         val idx = notes.indexOfFirst { it.time == id }
         if (idx < 0) return "没有找到编号为 $id 的便签，请先 read_notes 确认编号"
+        // time 兼作 id：更新时保留原值，不然模型拿着旧 id 再 delete 会报"没找到"（体检 P2-6）
         notes[idx] = notes[idx].copy(
             title = newTitle.ifBlank { notes[idx].title },
-            content = newContent.ifBlank { notes[idx].content },
-            time = System.currentTimeMillis()
+            content = newContent.ifBlank { notes[idx].content }
         )
         save(c, notes)
         "已更新便签：「${notes[idx].title}」"

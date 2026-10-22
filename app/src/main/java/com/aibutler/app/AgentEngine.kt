@@ -901,6 +901,28 @@ object AgentEngine {
                     android.util.Log.i("AIButler", "Blocked Tap in unintended live room: $exitLabel")
                     return AglmResult(info, false)
                 }
+                // 📵 下载墙：会自动触发APK下载/安装的广告页，绝不停留（与主循环守卫对齐，兜住批量动作间隙）
+                if (!taskWantsJump && PageGuard.isDownloadWall(normalizedPage)) {
+                    val exitLabel = PageGuard.safeAdExitLabel(screenDump.orEmpty())
+                    val info = when {
+                        exitLabel != null && svc?.clickText(exitLabel)?.startsWith("已") == true ->
+                            "已点击「$exitLabel」退出下载墙"
+                        svc?.pressBack() == true -> "已按返回退出下载墙（防止自动安装软件）"
+                        else -> DeviceTools.NO_A11Y
+                    }
+                    android.util.Log.i("AIButler", "Blocked Tap in download wall: ${exitLabel ?: "无安全关闭控件"}")
+                    return AglmResult(info, false, "__JUMP_BLOCK__")
+                }
+                // 🎬 误入拍摄/创作页：非创作任务里一旦走到发布就是高危动作，立即不保存退出
+                if (PageGuard.isUnintendedCreationPage(userTask, screenDump.orEmpty())) {
+                    val discard = PageGuard.CREATION_DISCARD_LABELS.firstNotNullOfOrNull { lbl ->
+                        svc?.clickText(lbl)?.takeIf { it.startsWith("已") }
+                    }
+                    val info = discard
+                        ?: if (svc?.pressBack() == true) "已不保存退出拍摄/创作页" else DeviceTools.NO_A11Y
+                    android.util.Log.i("AIButler", "Blocked Tap in unintended creation page")
+                    return AglmResult(info, false, "__JUMP_BLOCK__")
+                }
                 val isCommercePage = Regex(
                     "立即抢购|立即购买|去支付|提交订单|确认订单|马上抢|单件包邮|拼单|加入购物车|购买数量|商品详情|已选.*规格",
                     RegexOption.IGNORE_CASE
@@ -941,6 +963,26 @@ object AgentEngine {
                     AglmResult("🛑 已拦截隐私条款同意按钮，需要用户自行确认是否同意。", false, "__PRIVACY_BLOCK__")
                 }
                 else {
+                    // 🪟 弹窗硬关闭层：阻塞性弹窗特征命中且模型点的不是关闭控件本身时，改为代点关闭，
+                    // 防止模型隔着弹窗点到底层页面内容或弹窗里的转化按钮（兜住批量动作间隙）
+                    val popup = PopupGuard.plan(userTask, screenDump.orEmpty())
+                    val tapScore = nearbyLabel.split(" / ").maxOfOrNull { ExitMemory.scoreButton(it) } ?: 0
+                    if (popup != null && tapScore <= 0) {
+                        val closed = svc?.clickText(popup.closeLabel)?.startsWith("已") == true
+                        val popupInfo = if (closed) {
+                            "🪟 已自动点击「${popup.closeLabel}」关闭弹窗（${popup.reason}），请重新读屏后再操作"
+                        } else {
+                            "🪟 检测到阻塞性弹窗（${popup.reason}），本次点击已暂停：" +
+                                "请优先点击弹窗上的关闭/跳过/以后再说/我知道了，找不到就 do(action=\"Back\")"
+                        }
+                        android.util.Log.i(
+                            "AIButler",
+                            "Popup guard: ${popup.reason}, label=${popup.closeLabel}, closed=$closed"
+                        )
+                        // 独立标记 __POPUP_BLOCK__：弹窗拦截不是「跳转入口」，不进 jumpBlockStreak
+                        // （否则弹窗连拦 3 次会误代按返回，违背 PopupGuard 不盲目 Back 的设计）
+                        AglmResult(popupInfo, false, "__POPUP_BLOCK__")
+                    } else {
                     val targetX = norm(corrected.first, realW).toFloat()
                     val targetY = norm(corrected.second, realH).toFloat()
                     svc?.showActionPreview(targetX, targetY, nearbyLabel)
@@ -949,6 +991,7 @@ object AgentEngine {
                         "已点击屏幕(${corrected.first},${corrected.second})" +
                             if (correctedLabel.isBlank()) "" else "→${correctedLabel}"
                     else DeviceTools.NO_A11Y, false)
+                    }
                     }
             }
             "Type", "Type_Name" -> {
@@ -1406,10 +1449,10 @@ object AgentEngine {
             "scroll_screen" -> {
                 val dir = s("direction").lowercase().trim()
                 when (dir) {
-                    "up" -> svc?.scroll(false) ?: DeviceTools.NO_A11Y
+                    "up" -> if (svc?.scroll(false) == true) "已向上滑动屏幕" else DeviceTools.NO_A11Y
                     "left" -> svc?.scrollHorizontal(false) ?: DeviceTools.NO_A11Y
                     "right" -> svc?.scrollHorizontal(true) ?: DeviceTools.NO_A11Y
-                    else -> svc?.scroll(true) ?: DeviceTools.NO_A11Y
+                    else -> if (svc?.scroll(true) == true) "已向下滑动屏幕" else DeviceTools.NO_A11Y
                 }
             }
             "go_home" -> if (svc?.home() == true) "已回到桌面" else DeviceTools.NO_A11Y
