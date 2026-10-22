@@ -40,6 +40,11 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 enum class TaskVerdict { CONFIRMED, MARK_FAILED }
 
+/** 停止悬浮球的点击/拖动边界：非拖动的抬手都视为用户要打开确认窗。 */
+object StopBubbleGesturePolicy {
+    fun shouldTogglePopupOnActionUp(dragging: Boolean): Boolean = !dragging
+}
+
 /**
  * 无障碍服务：AI 的"眼睛和手指"。
  * - dumpScreen()：读取当前屏幕上的文字
@@ -159,7 +164,7 @@ class AssistantAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 第一次点按只完整展开；展开后点按才确认，五秒无操作自动收回一半 */
+    /** 单击立即打开确认窗；拖动只改位置，五秒无操作自动收回一半 */
     private fun attachStopBubbleTouch(view: View, params: WindowManager.LayoutParams) {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         val slop = ViewConfiguration.get(this).scaledTouchSlop
@@ -168,7 +173,6 @@ class AssistantAccessibilityService : AccessibilityService() {
         var startX = 0
         var startY = 0
         var dragging = false
-        var expandedAtDown = false
 
         fun update() {
             runCatching { wm.updateViewLayout(view, params) }
@@ -182,7 +186,6 @@ class AssistantAccessibilityService : AccessibilityService() {
                     downRawY = event.rawY
                     dragging = false
                     cancelStopBubbleCollapse()
-                    expandedAtDown = stopBubbleExpanded
                     if (!stopBubbleExpanded) {
                         expandStopBubble(view, params, screenW, screenH)
                     }
@@ -206,7 +209,7 @@ class AssistantAccessibilityService : AccessibilityService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragging && expandedAtDown) {
+                    if (StopBubbleGesturePolicy.shouldTogglePopupOnActionUp(dragging)) {
                         toggleStopPopup()
                     }
                     scheduleStopBubbleCollapse()

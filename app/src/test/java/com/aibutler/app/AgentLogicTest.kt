@@ -776,6 +776,12 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 停止悬浮球_单击直接弹确认窗且拖动不弹() {
+        assertTrue("收起态第一次点按也要直接打开确认窗", StopBubbleGesturePolicy.shouldTogglePopupOnActionUp(dragging = false))
+        assertFalse("拖动松手只应保留位置，不应误开确认窗", StopBubbleGesturePolicy.shouldTogglePopupOnActionUp(dragging = true))
+    }
+
+    @Test
     fun autoGlmPrompt_思考过程不再被120字上限压死() {
         val p = AgentEngine.autoGlmSystemPrompt()
         assertFalse("思考不应再被120字上限压缩", p.contains("不超过120个字"))
