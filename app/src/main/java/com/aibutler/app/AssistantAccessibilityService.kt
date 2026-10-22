@@ -376,7 +376,8 @@ class AssistantAccessibilityService : AccessibilityService() {
             setPadding(dp(14), dp(8), dp(14), dp(8))
             background = roundedBackground(Color.parseColor("#FF4D4F"), dp(18).toFloat())
             setOnClickListener {
-                TaskControlBus.requestPause()
+                TaskControlBus.requestPause(returnToAssistant = true)
+                hideTaskControls()
                 hideStopPopup()
             }
         }

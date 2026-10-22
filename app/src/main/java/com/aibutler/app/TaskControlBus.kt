@@ -8,12 +8,12 @@ object TaskControlBus {
     var pauseRequested = false
 
     @Volatile
-    var pauseHandler: (() -> Unit)? = null
+    var pauseHandler: ((returnToAssistant: Boolean) -> Unit)? = null
 
-    fun requestPause() {
+    fun requestPause(returnToAssistant: Boolean = false) {
         if (taskRunning) {
             pauseRequested = true
-            pauseHandler?.invoke()
+            pauseHandler?.invoke(returnToAssistant)
         }
     }
 

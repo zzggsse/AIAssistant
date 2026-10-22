@@ -97,11 +97,18 @@ class MainActivity : AppCompatActivity() {
 
         adapter = ChatAdapter(this)
         adapter.loadPersisted()
-        TaskControlBus.pauseHandler = {
+        TaskControlBus.pauseHandler = { returnToAssistant ->
             if (busy) {
                 tts?.stop()
+                if (returnToAssistant) returnToConversationAfterTask()
                 runOnUiThread {
-                    adapter.add(ChatAdapter.Msg("system", "⏸️ 收到，正在暂停（当前步骤完成后停下）…"))
+                    adapter.add(
+                        ChatAdapter.Msg(
+                            "system",
+                            if (returnToAssistant) "⏸️ 已开始返回助手；当前动作收尾后会停下。"
+                            else "⏸️ 收到，正在暂停（当前步骤完成后停下）…"
+                        )
+                    )
                     rv.scrollToPosition(adapter.items.size - 1)
                 }
             }
