@@ -575,6 +575,49 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 返回意图_左上角Tap改走系统返回() {
+        val answer = "<think>当前是赚钱任务页，目标视频在外面，先返回到视频播放页面。</think>" +
+            "<answer>do(action=\"Tap\", element=[48,48])</answer>"
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 赚钱任务 短剧 热点 直播 侧边栏有8条未读消息\n" +
+            "可点击: 短剧，按钮 {,TextView} [52,49]\n" +
+            "可点击: 热点 [220,49]"
+
+        val result = AgentEngine.execAutoGLM(
+            null,
+            answer,
+            realW = 1080,
+            realH = 2400,
+            userTask = "去抖音极速版看视频刷金币",
+            screenDump = dump
+        )
+
+        assertFalse("返回导航不应命中高风险拦截", result.message == "__JUMP_BLOCK__")
+        assertEquals("应已进入系统返回执行层", DeviceTools.NO_A11Y, result.info)
+    }
+
+    @Test
+    fun 返回意图_普通奖励高风险入口仍拦截() {
+        val answer = "<think>这里有看直播领金币入口。</think>" +
+            "<answer>do(action=\"Tap\", element=[500,300])</answer>"
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 赚钱任务\n" +
+            "可点击: 看直播领金币 [500,300]"
+
+        val result = AgentEngine.execAutoGLM(
+            null,
+            answer,
+            realW = 1080,
+            realH = 2400,
+            userTask = "去抖音极速版看视频刷金币",
+            screenDump = dump
+        )
+
+        assertEquals("__JUMP_BLOCK__", result.message)
+        assertTrue(result.info.contains("已拦截奖励任务里的高风险入口"))
+    }
+
+    @Test
     fun 页面防护_下载墙优先点击安全退出() {
         val dump = "当前应用: com.any.reward.app\n" +
             "页面内容: 广告 完成互动领取金币福利 立即下载 红果免费短剧\n" +
@@ -723,6 +766,13 @@ class AgentLogicTest {
         val zhipu = Vendors.byId("zhipu")
         assertEquals("autoglm-phone", zhipu.model)
         assertEquals("autoglm-phone", zhipu.models.first())
+    }
+
+    @Test
+    fun autoGlmPrompt_返回导航必须使用Back() {
+        val prompt = AgentEngine.autoGlmSystemPrompt()
+        assertTrue(prompt.contains("【返回导航】"))
+        assertTrue(prompt.contains("必须输出 do(action=\"Back\")"))
     }
 
     @Test

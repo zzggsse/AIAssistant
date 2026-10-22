@@ -1860,6 +1860,8 @@ class MainActivity : AppCompatActivity() {
             var blockedRewardFinishRounds = 0
             var downloadWallExitRounds = 0
             var retryNote = ""
+            var lastActionFeedback = ""    // 上一轮「动作→页面变化」反馈，注入下一轮 screenInfo 后清空
+            var jumpBlockStreak = 0        // 连续跳转/下载类拦截次数：模型反复撞同一拦截时升级处理
             var progressHoldRounds = 0
             val visitedPackages = LinkedHashSet<String>()
             val pageTrace = LinkedHashSet<String>()
@@ -1946,7 +1948,7 @@ class MainActivity : AppCompatActivity() {
                 if (visionFrame != null) {
                     runOnUiThread {
                         adapter.addVision(
-                            "第${round}轮 · 已发送给AI的真实截图\n原始：${realW}×${realH}，识别用：${AgentEngine.VISION_MAX_W}宽",
+                            "第${round}轮 · 原始截图（发给AI的版本另叠加读屏编号角标）\n原始：${realW}×${realH}，识别用：${AgentEngine.VISION_MAX_W}宽",
                             visionFrame.absolutePath
                         )
                         rv.scrollToPosition(adapter.items.size - 1)
@@ -2068,6 +2070,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 val screenDump = AssistantAccessibilityService.instance?.dumpScreenForAutoGLM()
                     ?: "当前应用: $appPkg\n无法读取页面结构"
+                // Set-of-Marks：给可点击/输入框行加编号，供截图角标与模型对照。
+                // 屏幕信息展示用带编号版；执行链路（纠偏/校验/守卫）仍用原始 screenDump，互不影响。
+                val (markedDump, screenMarks) = AgentEngine.annotateAutoGlmDump(screenDump)
                 // Bug#6：系统隐私遮挡（ColorOS投屏抹黑）时视觉脑完全不可用，立即终止
                 val privacyHidden = screenDump.contains("已隐藏") ||
                     screenDump.contains("画面被隐藏") ||
@@ -2373,18 +2378,27 @@ class MainActivity : AppCompatActivity() {
                         "\n✅ 当前应用确认：目标应用（包名 $appPkg），请按这个应用的原生页面继续任务。"
                     else -> ""
                 }
-                val screenInfo = "$appIdentityNote$screenDump$countdownNote$doneNote$cardNote$pickerNote$pickerTargetAdvise$goalNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
+                // 动作-变化反馈：注入一次就清空，只描述紧邻的上一动作
+                val feedbackLine = if (lastActionFeedback.isBlank()) "" else "$lastActionFeedback\n"
+                lastActionFeedback = ""
+                val markNote = if (screenMarks.isEmpty()) ""
+                    else "\n🎯 本轮截图已叠加蓝色数字角标（共${screenMarks.size}个）：角标=可点击/输入框元素的编号，与关键元素行首的[N]一一对应。" +
+                        "要点击带角标的元素，Tap 坐标就是角标中心（即该元素中心）；编号绝不能当坐标输出；没有角标的元素仍按截图位置输出。"
+                val screenInfo = "$feedbackLine$appIdentityNote$markedDump$countdownNote$doneNote$cardNote$pickerNote$pickerTargetAdvise$goalNote$markNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
                     "\n坐标规则：Tap坐标只能来自截图目标中心；不要抄“关键元素”里的坐标。截图上明显存在但关键元素没列出的按钮，也必须按截图位置输出。" +
                     retryNote +
                     "$taskNote\n输出要求：先输出<think>一句话说明当前是什么页面、目标元素在哪、为什么选这个动作（120字以内）</think>，再输出一个动作。"
                 android.util.Log.i("AIButler", "AGLM screenInfo=${screenInfo.take(500).replace('\n', ' ')}")
                 val textPart = if (round == 1) "$userText\n\n$screenInfo" else "** Screen Info **\n\n$screenInfo"
+                // 角标版截图：叠加失败或没有可标注元素时回退原图
+                val markedB64 = if (screenMarks.isEmpty()) b64
+                    else AgentEngine.drawMarksOnB64(b64, screenMarks) ?: b64
                 ctx.add(JsonObject().apply {
                     addProperty("role", "user")
                     add("content", JsonArray().apply {
                         add(JsonObject().apply {
                             addProperty("type", "image_url")
-                            add("image_url", JsonObject().apply { addProperty("url", "data:image/jpeg;base64,$b64") })
+                            add("image_url", JsonObject().apply { addProperty("url", "data:image/jpeg;base64,$markedB64") })
                         })
                         add(JsonObject().apply { addProperty("type", "text"); addProperty("text", textPart) })
                     })
@@ -2417,6 +2431,12 @@ class MainActivity : AppCompatActivity() {
                 } else if (protocolMatch == null) {
                     parseFails++
                     android.util.Log.i("AIButler", "AGLM protocol violation: ${raw.take(180)}")
+                    if (Prefs.evalLog(this)) EvalLogger.log(this, JsonObject().apply {
+                        addProperty("type", "parse_fail")
+                        addProperty("goal", userText.take(80))
+                        addProperty("round", round)
+                        addProperty("raw", raw.take(400))
+                    })
                     showRawAsThinking(raw)
                     if (parseFails >= 4) {
                         finalReply = "连续多次未按动作协议输出，任务中止。"
@@ -2798,6 +2818,35 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                 }
+                // ===== 评测落盘：本轮「回答→执行→页面变化」写一条 JSONL =====
+                val postExecFp = AssistantAccessibilityService.instance?.currentPageFingerprint()?.first
+                val pageChanged = postExecFp != null && postExecFp != preActionFp?.first
+                if (Prefs.evalLog(this)) {
+                    EvalLogger.log(this, JsonObject().apply {
+                        addProperty("type", "round")
+                        addProperty("goal", userText.take(80))
+                        addProperty("round", round)
+                        addProperty("pkg", appPkg)
+                        addProperty("answer", answer.take(300))
+                        addProperty("res_info", res.info.take(300))
+                        res.message?.let { addProperty("blocked", it.take(60)) }
+                        addProperty("page_changed", pageChanged)
+                        addProperty("marks", screenMarks.size)
+                        visionFrame?.let { addProperty("frame", it.name) }
+                    })
+                }
+                // ===== 动作-变化反馈：给模型一个明确的「这次点击到底生效没」信号 =====
+                // 只有真正执行了的动作（非 finish/拦截/解析失败）才生成反馈并复位拦截连击
+                if (!res.finished && res.message == null) {
+                    jumpBlockStreak = 0
+                    val isWaitAction = answer.contains("Wait")
+                    lastActionFeedback = "🧭 上一动作反馈：" + res.info.take(90) + " → " + when {
+                        postExecFp == null -> "执行后未能读取页面状态"
+                        pageChanged -> "页面已变化，动作生效；请基于新页面重新观察，不要沿用旧结论"
+                        isWaitAction -> "页面文本无变化（若在等视频/倒计时属正常，继续推进；连续无变化就别再等了）"
+                        else -> "⚠️页面无任何变化，该动作很可能无效——绝不要重复同一坐标/同一元素，换入口、按返回或滑动另找路径"
+                    }
+                }
                 // 录制：执行+稳定后取目标页面指纹，追加到路径链
                 if (preActionFp != null && !res.finished && res.message != "__PARSE_FAIL__" &&
                     !res.message?.startsWith("🛑").let { it == true } && !res.message?.startsWith("⚠️").let { it == true }) {
@@ -2821,6 +2870,12 @@ class MainActivity : AppCompatActivity() {
                 if (res.message == "__PARSE_FAIL__") {
                     parseFails++
                     android.util.Log.i("AIButler", "AGLM 动作解析失败: ${answer.take(120)}")
+                    if (Prefs.evalLog(this)) EvalLogger.log(this, JsonObject().apply {
+                        addProperty("type", "parse_fail")
+                        addProperty("goal", userText.take(80))
+                        addProperty("round", round)
+                        addProperty("raw", answer.take(400))
+                    })
                     showRawAsThinking(raw)
                     if (parseFails >= 4) {
                         finalReply = "连续多次动作解析失败，任务中止。请换个说法重试。"
@@ -2834,13 +2889,25 @@ class MainActivity : AppCompatActivity() {
                 }
                 parseFails = 0
                 if (res.message == "__JUMP_BLOCK__") {
+                    jumpBlockStreak++
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg("system", res.info))
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
+                    val blockedTarget = res.info.substringAfter("：", "").take(50)
+                    // 连续撞拦截说明模型在反复尝试同一类外跳入口：第3次起系统代按返回帮它离开这一页
+                    val escapeNote = if (jumpBlockStreak >= 3) {
+                        val backed = AssistantAccessibilityService.instance?.pressBack() == true
+                        android.util.Log.i("AIButler", "AGLM jump-block streak=$jumpBlockStreak, back=$backed")
+                        "已连续${jumpBlockStreak}次撞上拦截，系统已替你按返回离开当前页面。"
+                    } else ""
                     ctx.add(JsonObject().apply {
                         addProperty("role", "user")
-                        addProperty("content", "🛑 系统提示：上一步坐标命中疑似跳转其他应用的入口，已拦截，没有点击。请重新看最新截图，改选目标应用内部的原生任务；看不准就 Swipe 或 Back。")
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：上一步坐标命中疑似跳转/下载/更新类入口（被拦元素：${blockedTarget.ifBlank { "未知" }}），已拦截，没有点击。$escapeNote" +
+                                "绝不要再点这个位置或同类入口；请重新看最新截图，改选目标应用内部的原生任务；看不准就 Swipe 或 Back。"
+                        )
                     })
                     continue
                 }
@@ -3036,6 +3103,12 @@ class MainActivity : AppCompatActivity() {
             } else {
                 val reply = finalReply ?: "任务结束"
                 android.util.Log.i("AIButler", "AGLM 最终回复: $reply")
+                if (Prefs.evalLog(this)) EvalLogger.log(this, JsonObject().apply {
+                    addProperty("type", "end")
+                    addProperty("goal", userText.take(80))
+                    addProperty("rounds", round)
+                    addProperty("reply", reply.take(400))
+                })
                 val judgedSuccess = reply.contains("✅")
                 // 勾=记成功经验；叉=记失败经验（AI 下次避开）；null=不记录/超时未答。
                 // AI 自述失败（无✅）时不弹窗，直接交给总结模型判失败经验。

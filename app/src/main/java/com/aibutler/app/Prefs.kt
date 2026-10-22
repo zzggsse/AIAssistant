@@ -125,6 +125,12 @@ object Prefs {
         get(c).edit().putBoolean("developerMode", v).apply()
     }
 
+    /** 评测落盘开关：视觉脑每轮「输入→回答→执行→页面变化」写 JSONL，供调优对比 */
+    fun evalLog(c: Context): Boolean = get(c).getBoolean("evalLog", true)
+    fun setEvalLog(c: Context, v: Boolean) {
+        get(c).edit().putBoolean("evalLog", v).apply()
+    }
+
     /** 把旧版本里关闭的思考展示和快速模式切到可见状态；用户之后仍可在设置里改。 */
     fun ensureThinkingVisible(c: Context) {
         val sp = get(c)

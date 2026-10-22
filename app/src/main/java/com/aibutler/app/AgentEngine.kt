@@ -376,6 +376,101 @@ object AgentEngine {
         }
     }
 
+    // ========== Set-of-Marks：读屏元素编号角标 ==========
+
+    /** 一个待标注的可交互元素：读屏坐标(0-999) + 简短说明 */
+    data class ScreenMark(val x999: Int, val y999: Int, val kind: String, val label: String)
+
+    /** 最多画多少个角标：太多会互相遮盖，也稀释模型注意力 */
+    const val MAX_SCREEN_MARKS = 30
+
+    /**
+     * 给读屏结果里的可点击/输入框行加 [N] 编号，并返回角标坐标表。
+     * 编号按读屏顺序（底部导航项已排最前），与截图上画的角标一一对应；
+     * 模型选角标 → Tap 角标中心 → 原有 correctTapToScreenElement 吸附逻辑照常兜底。
+     * 只给文本行加前缀，行内的 label/坐标原样保留，dump 的其他消费方
+     * （指纹、PageGuard、TaskGoalVerifier）拿到的仍是原文，不受影响。
+     */
+    fun annotateAutoGlmDump(dump: String): Pair<String, List<ScreenMark>> {
+        if (dump.isBlank()) return Pair(dump, emptyList())
+        val marks = ArrayList<ScreenMark>()
+        var n = 0
+        val sb = StringBuilder(dump.length + 256)
+        for (line in dump.lineSequence()) {
+            val head = Regex("^((?:可点击|输入框):\\s*)(.*)$").find(line)
+            val coords = if (head != null) Regex("\\[(-?\\d+),(-?\\d+)]\\s*$").find(line) else null
+            if (head == null || coords == null || n >= MAX_SCREEN_MARKS) {
+                sb.append(line).append('\n')
+                continue
+            }
+            n++
+            marks.add(
+                ScreenMark(
+                    coords.groupValues[1].toInt(),
+                    coords.groupValues[2].toInt(),
+                    if (line.startsWith("输入框")) "输入框" else "可点击",
+                    head.groupValues[2].take(40)
+                )
+            )
+            sb.append(head.groupValues[1]).append('[').append(n).append("] ")
+                .append(head.groupValues[2]).append('\n')
+        }
+        return Pair(sb.toString().trimEnd(), marks)
+    }
+
+    /**
+     * 把编号角标画到截图上（蓝色半透明圆+白字数字），返回新 base64。
+     * 角标画在元素读屏中心，模型点角标中心 = 点元素中心，把「看图猜坐标」
+     * 变成「按编号选元素」。解码失败或没有可标注元素时返回 null，调用方回退原图。
+     */
+    fun drawMarksOnB64(b64: String, marks: List<ScreenMark>): String? {
+        if (marks.isEmpty()) return null
+        return try {
+            val data = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
+            val src = android.graphics.BitmapFactory.decodeByteArray(data, 0, data.size)
+                ?: return null
+            // JPEG 解码出的 bitmap 通常不可变，Canvas 需要可变副本
+            val bmp = if (src.isMutable) src else {
+                val copy = src.copy(Bitmap.Config.ARGB_8888, true)
+                src.recycle()
+                copy ?: return null
+            }
+            val canvas = android.graphics.Canvas(bmp)
+            val w = bmp.width.toFloat()
+            val h = bmp.height.toFloat()
+            val r = w * 0.013f
+            val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xB3176BD6.toInt() // 半透明蓝，盖在元素上仍能看出底下的图标
+                style = android.graphics.Paint.Style.FILL
+            }
+            val ring = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                style = android.graphics.Paint.Style.STROKE
+                strokeWidth = r * 0.35f
+            }
+            val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                textSize = r * 1.5f
+                textAlign = android.graphics.Paint.Align.CENTER
+                isFakeBoldText = true
+            }
+            for ((index, mark) in marks.withIndex()) {
+                val cx = mark.x999.coerceIn(0, 999) / 999f * w
+                val cy = mark.y999.coerceIn(0, 999) / 999f * h
+                canvas.drawCircle(cx, cy, r, fill)
+                canvas.drawCircle(cx, cy, r, ring)
+                val ty = cy - (text.ascent() + text.descent()) / 2f
+                canvas.drawText((index + 1).toString(), cx, ty, text)
+            }
+            val bos = java.io.ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, bos)
+            bmp.recycle()
+            android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** AutoGLM 视觉脑系统提示词：通用任务循环，而不是只针对某类收益任务 */
     fun autoGlmSystemPrompt(): String {
         val now = SimpleDateFormat("yyyy年MM月dd日", Locale.CHINA).format(Date())
@@ -401,6 +496,7 @@ object AgentEngine {
             "必须遵循的规则：\n" +
             "1. 第一轮先从任务推断目标应用和粗略路径（最多3-6步），不要问用户；任务开始时允许并应当 Launch 与任务直接相关的目标应用，这是正常导航。进入目标应用后，才按第7条严格防止误跳转；目标不明确时优先从桌面找官方应用。\n" +
             "2. 默认每次点击、输入、滑动、返回后都会进入下一轮；必须把下一轮截图/页面内容当作新页面重新观察，不能沿用旧坐标或旧结论（同页批量例外见第17条）。『当前应用/页面内容/关键元素』是系统实时读取的权威状态；如果它和截图看起来冲突，以实时读取为准，必要时 Wait 后重新观察。\n" +
+            "2.1 截图上如有蓝色数字圆点角标，是系统给可点击/输入框元素编的号，与关键元素行首的[N]一一对应：要点击带角标的元素，就把 Tap 坐标给到角标中心（即该元素中心）；编号只是选择依据，绝不能把编号数字当坐标输出；没有角标的元素仍按截图位置判断。\n" +
             "3. 优先点击文字、图标说明或页面概要中明确匹配目标的可点击元素；无文字按钮要结合截图位置判断。\n" +
             "4. 输入前先点击输入框，确认聚焦后 Type；需要确认/搜索/发送时，观察新页面再点击对应按钮。\n" +
             "5. 页面加载中、看视频或等倒计时时用 Wait；连续 Wait 三次仍无变化就重新观察或返回重试。\n" +
@@ -408,6 +504,7 @@ object AgentEngine {
             "6.1 【禁碰系统开关】绝不从屏幕顶部下拉通知栏/快捷中心，绝不点击里面的任何开关（自动旋转、手电筒、省电模式等）；滑动一律从屏幕中部开始。\n" +
             "6.2 【助手悬浮气泡】截图里屏幕边缘的红色圆形「停止任务」悬浮气泡（可能只露出一半）是用户手动叫停任务用的助手控件，不属于任何App页面：绝不点击它、不绕开它，也不把它当作页面元素或完成证据。\n" +
             "7. 【跳转判定】点击前判断入口是否可能离开目标应用。明确的目标应用原生入口可以点击；含下载、安装、去下载、试玩、浏览器、第三方、外部、其他App、跳转等含义的入口不要点。看不准时不要点，改选明确匹配任务的原生入口；若已经误入其他应用，先 Back 返回，回不去就 Home 后重新 Launch 目标应用。\n" +
+            "7.1 【返回导航】需要返回上一页、视频页、任务页或退出当前页面时，必须输出 do(action=\"Back\")；不要点左上角返回箭头，也不要因为页面出现下载、短剧、直播等文案而改变返回动作。\n" +
             "8. 【下滑优先规则】每个新页面先判断目标是否已可见。目标可见就直接操作；目标不可见且页面有列表/信息流/被截断内容/可滑动区域时，先 Swipe 从下往上查看完整内容，每次滑动后重新读屏判断。连续滑动2-3次页面内容不变就停止滑动，改点可见入口或返回。\n" +
             "8.1 【遮挡处理】被悬浮挂件挡住的目标一律按「不可见」处理。宝箱、红包、金币浮标、道具、悬浮球等挂件盖住入口时：先 Swipe 从屏幕中部滑动半屏让页面滚动，再重新观察；若挂件本身与赚钱任务相关（开宝箱/领金币/看广告得奖励），可先点挂件领完奖励再返回；也可从「我/钱包/任务中心」等其他入口绕行。绝不反复点击被挡住的同一位置。\n" +
             "8.2 【滚轮/选择器通用规则】遇到时间、日期、数字、选项滚轮时，先从最新截图和关键元素里独立识别每一列/每一项的控件中心。Swipe 必须以目标控件自身的 X 坐标为准，上下小幅滑动；绝不跨到相邻列、页面中部或别的控件。每次滑动后重新读屏确认当前值；方向错了下一轮反向，改到与用户要求的精确值完全一致前不要点击保存/完成/确定。用户说「X点/X时」但没有指定分钟时，目标分钟是00。\n" +
@@ -610,6 +707,17 @@ object AgentEngine {
         return navIntent
     }
 
+    /**
+     * 识别「返回上一页/回到视频页」类导航意图。返回是系统级安全动作；
+     * 即使模型误用 Tap 点左上角箭头，也不应把页面里的高风险业务文案误认成点击目标。
+     */
+    fun isReturnNavigationIntent(answer: String): Boolean = Regex(
+        "(返回|回到)(到|去)?(视频播放|视频页|播放页|上一页|上一屏|之前的页面|原来的页面|任务页|首页|主页)|退出(当前|这个)页面"
+    ).containsMatchIn(answer.replace(Regex("\\s+"), ""))
+
+    /** 协议坐标下，应用标题栏左上角返回箭头的通用区域。 */
+    fun isTopLeftBackControlArea(x: Int, y: Int): Boolean = x in 0..140 && y in 0..170
+
     /** 连续 Wait 卡死的纠正提示 */
     fun waitStallCorrectNote(count: Int): String =
         "⚠️ 系统提示：页面内容已连续 $count 轮完全相同，而你在持续 Wait。视频/进度大概率已结束，" +
@@ -727,6 +835,12 @@ object AgentEngine {
                 // 修复：缺坐标时直接返回提示。旧代码会先走进 correctTapToScreenElement 的 modelPoint!! 抛异常，
                 // 导致整个 AutoGLM 任务中止（视觉模型偶尔输出不带坐标的 Tap 时必崩）
                 val p = pt("element") ?: return AglmResult("Tap缺坐标", false)
+                if (isReturnNavigationIntent(answer) && isTopLeftBackControlArea(p.first, p.second)) {
+                    return AglmResult(
+                        if (svc?.pressBack() == true) "已按返回回到上一页" else DeviceTools.NO_A11Y,
+                        false
+                    )
+                }
                 if (isTextSelectionToolbar(screenDump)) {
                     return AglmResult(
                         if (svc?.pressBack() == true) "已退出文本选择工具栏" else DeviceTools.NO_A11Y,
@@ -747,9 +861,12 @@ object AgentEngine {
                         normalizedLabel.contains(normalizedLabelAtPoint)
                 } == true
                 val jumpPattern = Regex(
-                    "下载|安装|试玩|第三方|外部|跳转|网盘",
+                    "下载|安装|试玩|第三方|外部|跳转|网盘|立即更新|版本更新|去更新",
                     RegexOption.IGNORE_CASE
                 )
+                // 任务本身就是要下载/安装/更新时，入口命中这些词是正当操作，不能拦
+                val taskWantsJump = Regex("更新|升级|下载|安装", RegexOption.IGNORE_CASE)
+                    .containsMatchIn(userTask)
                 val normalizedPage = screenDump.orEmpty().replace(Regex("\\s+"), "")
                 if (PageGuard.isUnintendedLiveRoom(userTask, normalizedPage)) {
                     val exitLabel = PageGuard.liveRoomExitLabel(screenDump.orEmpty())
@@ -776,7 +893,7 @@ object AgentEngine {
                         "__COMMERCE_BLOCK__"
                     )
                 }
-                else if (!targetAppMatched && jumpPattern.containsMatchIn(nearbyLabel)) {
+                else if (!targetAppMatched && !taskWantsJump && jumpPattern.containsMatchIn(nearbyLabel)) {
                     AglmResult("🛑 已拦截疑似跳转其他应用：${nearbyLabel.take(100)}", false, "__JUMP_BLOCK__")
                 }
                 else if (PageGuard.isUnsafeRewardTap(userTask, nearbyLabel)) {
