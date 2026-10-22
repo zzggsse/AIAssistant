@@ -93,6 +93,7 @@ class VisualFeatureLibrary(context: Context) {
         }
         if (samples.isEmpty() || candidateRects.isEmpty()) return emptyList()
         val hits = ArrayList<VisualMatch>()
+        val matchedIds = ArrayList<String>()
         for (rect in candidateRects) {
             if (rect.width() < MIN_WIDTH || rect.height() < MIN_HEIGHT) continue
             if (rect.right > screen.width || rect.bottom > screen.height) continue
@@ -114,9 +115,10 @@ class VisualFeatureLibrary(context: Context) {
                         score = score
                     )
                 )
-                recordMatch(best.id)
+                matchedIds.add(best.id)
             }
         }
+        recordMatches(matchedIds)
         return hits
     }
 
@@ -143,17 +145,23 @@ class VisualFeatureLibrary(context: Context) {
         return hashSim * 0.7f + colorSim * 0.3f
     }
 
-    private fun recordMatch(sampleId: String) {
+    /** 本帧所有命中合并成一次 load→改→save：逐 rect 各写一遍 index.json 是 agent 循环内的 I/O 放大 */
+    private fun recordMatches(sampleIds: List<String>) {
+        if (sampleIds.isEmpty()) return
         synchronized(this) {
+            val counts = sampleIds.groupingBy { it }.eachCount()
             val items = load().toMutableList()
-            val index = items.indexOfFirst { it.id == sampleId }
-            if (index >= 0) {
-                items[index] = items[index].copy(
-                    matchCount = items[index].matchCount + 1,
-                    lastMatchedAt = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            var changed = false
+            for (i in items.indices) {
+                val add = counts[items[i].id] ?: continue
+                items[i] = items[i].copy(
+                    matchCount = items[i].matchCount + add,
+                    lastMatchedAt = now
                 )
-                AtomicFiles.write(indexFile, gson.toJson(items))
+                changed = true
             }
+            if (changed) AtomicFiles.write(indexFile, gson.toJson(items))
         }
     }
 

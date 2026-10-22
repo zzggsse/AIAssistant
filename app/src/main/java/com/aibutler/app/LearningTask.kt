@@ -87,12 +87,15 @@ object LearningTaskStore {
                 val taskName = normalize(task.name)
                 val taskText = normalize(task.taskText)
                 var score = 0
+                val kwHits = task.keywords().count { it.length >= 2 && normalized.contains(it) }
                 if (taskName == normalized || taskText == normalized) score += 12
                 if (taskName.length >= 3 && normalized.contains(taskName)) score += 7
                 if (taskText.length >= 3 && normalized.contains(taskText)) score += 6
-                score += task.keywords().count { it.length >= 2 && normalized.contains(it) } * 2
+                score += kwHits * 2
                 if (task.targetAppName.isNotBlank() && normalized.contains(normalize(task.targetAppName))) score += 2
-                if (task.highPriority) {
+                // load() 把所有任务都标成 highPriority，所以这里必须先有真实匹配分量才加优先分，
+                // 否则零相关的聊天输入也会靠 +8 过线，弹出回放确认打断用户
+                if (task.highPriority && score > 0) {
                     score += 8
                     score += minOf(task.successCount, 5)
                 }

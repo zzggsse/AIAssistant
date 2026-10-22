@@ -176,7 +176,9 @@ object TaskGoalVerifier {
     private fun parseQuantity(raw: String): QuantityGoal? {
         val m = Regex("(\\d+(?:\\.\\d+)?)\\s*(杯|个|份|瓶|件|张|次|人|斤|公斤|克|毫升|升|公里|米)")
             .find(raw) ?: return null
-        val value = m.groupValues[1].trimEnd('0', '.').ifBlank { "0" }
+        // 只对带小数点的值去尾零（"2.0"→"2"）；整数不能动，否则 "10".trimEnd('0','.') 会变成 "1"
+        val rawNum = m.groupValues[1]
+        val value = (if (rawNum.contains('.')) rawNum.trimEnd('0').trimEnd('.') else rawNum).ifBlank { "0" }
         return QuantityGoal(value, m.groupValues[2])
     }
 

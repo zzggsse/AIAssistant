@@ -71,7 +71,11 @@ object CrashLogger {
             val archives = dir.listFiles { f -> f.name.startsWith("error_log_") }?.sorted() ?: emptyList()
             while (archives.size >= MAX_FILES) archives.first().delete()
             val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            current.renameTo(File(dir, "error_log_$ts.txt"))
+            val archived = current.renameTo(File(dir, "error_log_$ts.txt"))
+            if (!archived) {
+                // 改名失败（文件被占用等）就截断重建：否则超限文件永远轮转不出去
+                current.writeText("")
+            }
         }
     }
 }

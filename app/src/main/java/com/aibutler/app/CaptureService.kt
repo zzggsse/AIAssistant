@@ -116,24 +116,28 @@ class CaptureService : Service() {
             }
         }
 
-        fun stopAll() {
+        // start 与 stopAll 可能来自不同线程（投屏停止回调 / 主线程 / Agent 工作线程），
+        // 不加锁会让上一次的 stopAll 在新一轮 start 之后才执行完，出现"假激活"或半初始化状态
+        private val stateLock = Any()
+
+        fun stopAll() = synchronized(stateLock) {
             try { vdisplay?.release() } catch (e: Exception) { }
             try { projection?.stop() } catch (e: Exception) { }
-        try { reader?.close() } catch (e: Exception) { }
-        vdisplay = null
-        projection = null
-        try { frameHandler?.removeCallbacksAndMessages(null) } catch (_: Exception) { }
-        try { frameThread?.quitSafely() } catch (_: Exception) { }
-        frameHandler = null
-        frameThread = null
-        reader = null
-        // 回收缓存帧必须持锁：capture()/snapshot() 可能正在另一线程复制它，
-        // 否则会出现"使用已回收的 Bitmap"崩溃
-        synchronized(lastFrameLock) {
-            lastFrame?.recycle()
-            lastFrame = null
-        }
-        active = false
+            try { reader?.close() } catch (e: Exception) { }
+            vdisplay = null
+            projection = null
+            try { frameHandler?.removeCallbacksAndMessages(null) } catch (_: Exception) { }
+            try { frameThread?.quitSafely() } catch (_: Exception) { }
+            frameHandler = null
+            frameThread = null
+            reader = null
+            // 回收缓存帧必须持锁：capture()/snapshot() 可能正在另一线程复制它，
+            // 否则会出现"使用已回收的 Bitmap"崩溃
+            synchronized(lastFrameLock) {
+                lastFrame?.recycle()
+                lastFrame = null
+            }
+            active = false
         }
     }
 
@@ -175,30 +179,33 @@ class CaptureService : Service() {
         }
 
         try {
-            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            projection = mpm.getMediaProjection(code, data)
-            projection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    stopAll()
-                }
-            }, null)
-            reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-            frameThread = HandlerThread("AIButlerFrameReader").apply { start() }
-            frameHandler = Handler(frameThread!!.looper)
-            reader?.setOnImageAvailableListener({ imageReader ->
-                val image = try { imageReader.acquireLatestImage() } catch (_: Exception) { null }
-                if (image == null) return@setOnImageAvailableListener
-                val frame = try { imageToBitmap(image) } catch (_: Exception) { null }
-                try { image.close() } catch (_: Exception) { }
-                cacheFrame(frame)
-            }, frameHandler)
-            vdisplay = projection?.createVirtualDisplay(
-                "aivision", width, height, dpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader!!.surface, null, null
-            )
-            active = true
-            android.util.Log.i("AIButler", "Capture 虚拟屏幕已创建 active=true")
+            // 与 stopAll 互斥：防止上一轮投屏的停止回调在本轮初始化中途把资源拆掉
+            synchronized(stateLock) {
+                val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                projection = mpm.getMediaProjection(code, data)
+                projection?.registerCallback(object : MediaProjection.Callback() {
+                    override fun onStop() {
+                        stopAll()
+                    }
+                }, null)
+                reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+                frameThread = HandlerThread("AIButlerFrameReader").apply { start() }
+                frameHandler = Handler(frameThread!!.looper)
+                reader?.setOnImageAvailableListener({ imageReader ->
+                    val image = try { imageReader.acquireLatestImage() } catch (_: Exception) { null }
+                    if (image == null) return@setOnImageAvailableListener
+                    val frame = try { imageToBitmap(image) } catch (_: Exception) { null }
+                    try { image.close() } catch (_: Exception) { }
+                    cacheFrame(frame)
+                }, frameHandler)
+                vdisplay = projection?.createVirtualDisplay(
+                    "aivision", width, height, dpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    reader!!.surface, null, null
+                )
+                active = true
+                android.util.Log.i("AIButler", "Capture 虚拟屏幕已创建 active=true")
+            }
         } catch (e: Exception) {
             android.util.Log.i("AIButler", "Capture 初始化失败：${e.message}")
             stopAll()

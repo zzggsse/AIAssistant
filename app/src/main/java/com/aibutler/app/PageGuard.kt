@@ -93,6 +93,16 @@ object PageGuard {
         ).containsMatchIn(text)
     }
 
+    /** Install/download walls often cover the task page and swallow system Back. */
+    fun isDownloadWall(screenDump: String): Boolean = Regex(
+        "下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币",
+        RegexOption.IGNORE_CASE
+    ).containsMatchIn(normalize(screenDump))
+
+    /** Retention dialogs can keep Back inside the ad; use an explicit opt-out first. */
+    fun safeAdExitLabel(screenDump: String): String? =
+        ExitMemory.visibleButtons(screenDump).firstOrNull()?.label
+
     private fun isCommerceTask(task: String): Boolean {
         val text = normalize(task)
         if (Regex("不要|别|禁止|避免|不得").containsMatchIn(text)) {

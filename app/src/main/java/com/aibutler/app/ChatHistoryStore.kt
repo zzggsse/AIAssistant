@@ -16,11 +16,12 @@ object ChatHistoryStore {
     }
 
     fun load(context: Context): List<ChatAdapter.Msg> {
-        return runCatching {
-            file(context).readLines().mapNotNull { line ->
-                if (line.isBlank()) null else gson.fromJson(line, ChatAdapter.Msg::class.java)
-            }
-        }.getOrDefault(emptyList())
+        // jsonl 逐行解析、单行容错：一行损坏只丢该行，不再让整份历史清零
+        val lines = runCatching { file(context).readLines() }.getOrDefault(emptyList())
+        return lines.mapNotNull { line ->
+            if (line.isBlank()) null
+            else runCatching { gson.fromJson(line, ChatAdapter.Msg::class.java) }.getOrNull()
+        }
     }
 
     fun clear(context: Context) {

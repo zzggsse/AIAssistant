@@ -32,11 +32,19 @@ class NotificationCatcher : NotificationListenerService() {
             return try { gson.fromJson(f.readText(), type) ?: mutableListOf() } catch (_: Exception) { mutableListOf() }
         }
 
+        // 通知可能风暴式到达（微信/QQ 群消息）：序列化+写盘挪到单线程后台做，
+        // 避免主线程每条通知都整文件写盘造成卡顿
+        private val persistExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
         private fun persist(context: Context) {
-            try {
-                val f = java.io.File(context.filesDir, "notifications.json")
-                AtomicFiles.write(f, gson.toJson(recent.toList()))
-            } catch (_: Exception) { }
+            val appContext = context.applicationContext
+            persistExecutor.execute {
+                try {
+                    val items = synchronized(recent) { recent.toList() }
+                    val f = java.io.File(appContext.filesDir, "notifications.json")
+                    AtomicFiles.write(f, gson.toJson(items))
+                } catch (_: Exception) { }
+            }
         }
 
         fun init(context: Context) {
@@ -82,5 +90,12 @@ class NotificationCatcher : NotificationListenerService() {
             while (recent.size > MAX_CACHED) recent.removeFirst()
         }
         persist(this)
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        // 设备重启后系统会直接拉起本服务，不等用户打开 App：在这里也加载一次快照，
+        // 否则没开过 App 时 read_notifications 永远看到空列表。init 自带幂等保护
+        init(this)
     }
 }

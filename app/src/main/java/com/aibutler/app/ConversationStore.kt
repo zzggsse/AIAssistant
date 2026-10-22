@@ -133,6 +133,9 @@ object ConversationStore {
         cached = state
         runCatching {
             AtomicFiles.write(file(context), gson.toJson(state))
+        }.onFailure { e ->
+            // 写盘失败（磁盘满等）不能静默：用户以为已保存，实际一重启就丢
+            CrashLogger.log("ConversationStore", "会话持久化失败：${e.message}", e)
         }
     }
 

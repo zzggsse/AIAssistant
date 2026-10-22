@@ -19,6 +19,8 @@ data class AgentExperience(
 object AgentExperienceStore {
     private val gson = Gson()
     private val type = object : TypeToken<MutableList<AgentExperience>>() {}.type
+    // Agent 工作线程入库与 UI 线程增删改并发：load→改→save 必须整段互斥，否则后写者覆盖前者丢经验
+    private val lock = Any()
 
     private fun file(context: Context) = java.io.File(context.filesDir, "agent_experience.json")
 
@@ -39,7 +41,7 @@ object AgentExperienceStore {
         AtomicFiles.write(file(context), gson.toJson(items))
     }
 
-    fun relevant(context: Context, task: String, targetPackage: String? = null, limit: Int = 3): String {
+    fun relevant(context: Context, task: String, targetPackage: String? = null, limit: Int = 3): String = synchronized(lock) {
         val items = load(context)
         if (items.isEmpty()) return ""
         val normalizedTask = task.lowercase()
@@ -70,9 +72,9 @@ object AgentExperienceStore {
         }
     }
 
-    fun all(context: Context): List<AgentExperience> = load(context).sortedByDescending { it.updatedAt }
+    fun all(context: Context): List<AgentExperience> = synchronized(lock) { load(context).sortedByDescending { it.updatedAt } }
 
-    fun upsert(context: Context, experience: AgentExperience) {
+    fun upsert(context: Context, experience: AgentExperience): Unit = synchronized(lock) {
         if (isUnusableModelTranscript(experience.content)) return
         val items = load(context)
         val normalizedTitle = experience.title.trim().lowercase().replace(Regex("\\s+"), "")
@@ -110,10 +112,11 @@ object AgentExperienceStore {
             normalized.contains("（上一任务的参考结果）") ||
             normalized.contains("</think>", true) ||
             normalized.contains("<answer>", true) ||
-            Regex("do\\s*\\(", RegexOption.IGNORE_CASE).containsMatchIn(normalized)
+            // 只认协议动作原文格式；宽松的 do\s*\($ 会误杀含 "do (something)" 的正常英文经验
+            Regex("do\\s*\\(\\s*action\\s*=", RegexOption.IGNORE_CASE).containsMatchIn(normalized)
     }
 
-    fun remove(context: Context, target: AgentExperience): Boolean {
+    fun remove(context: Context, target: AgentExperience): Boolean = synchronized(lock) {
         val items = load(context)
         val index = items.indexOfFirst { it == target }
         if (index < 0) return false
@@ -123,7 +126,7 @@ object AgentExperienceStore {
     }
 
     /** 只改标题和详细内容；关键词、包名、成功标记、原记录时间保持不变 */
-    fun update(context: Context, original: AgentExperience, newTitle: String, newContent: String): Boolean {
+    fun update(context: Context, original: AgentExperience, newTitle: String, newContent: String): Boolean = synchronized(lock) {
         val items = load(context)
         val index = items.indexOfFirst { it == original }
         if (index < 0) return false
@@ -132,7 +135,7 @@ object AgentExperienceStore {
         return true
     }
 
-    fun clear(context: Context) {
+    fun clear(context: Context): Unit = synchronized(lock) {
         save(context, emptyList())
     }
 }

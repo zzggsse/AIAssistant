@@ -16,14 +16,9 @@
         android:theme="@style/Theme.AssistantOne"
         android:usesCleartextTraffic="true">
 
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+        <!-- 注意：这里曾有指向 .MainActivity 的 LAUNCHER 入口，但该类并不存在，
+             装上后点桌面图标必崩 ClassNotFoundException，已移除。
+             本模块定位是无障碍执行测试壳，如需界面请补齐类后再加回入口。 -->
 
         <service
             android:name=".AssistantOneAccessibilityService"

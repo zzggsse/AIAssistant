@@ -35,6 +35,8 @@ object ExitMemory {
     private const val TAG = "ExitMemory"
     private val gson = Gson()
     private val type = object : TypeToken<MutableMap<String, ExitRoute>>() {}.type
+    // Agent 工作线程记账与 UI 线程读写并发：load→改→save 必须整段互斥，否则后写者覆盖前者丢路线
+    private val lock = Any()
 
     private fun file(context: Context) = java.io.File(context.filesDir, "exit_memory.json")
 
@@ -117,9 +119,9 @@ object ExitMemory {
         }
     }
 
-    fun routeFor(context: Context, targetPackage: String, wrongPackage: String, trapLabel: String): List<String> {
+    fun routeFor(context: Context, targetPackage: String, wrongPackage: String, trapLabel: String): List<String> = synchronized(lock) {
         val route = load(context)[storageKey(targetPackage, wrongPackage, trapLabel)] ?: return emptyList()
-        return if (route.successCount > route.failureCount) route.actions else emptyList()
+        if (route.successCount > route.failureCount) route.actions else emptyList()
     }
 
     fun markSuccess(
@@ -128,7 +130,7 @@ object ExitMemory {
         wrongPackage: String,
         trapLabel: String,
         actions: List<String>
-    ) {
+    ): Unit = synchronized(lock) {
         val validActions = actions.filter { it == "Back" || it.isNotBlank() }.take(5)
         if (targetPackage.isBlank() || wrongPackage.isBlank() || validActions.isEmpty()) return
         val items = load(context)
@@ -148,7 +150,7 @@ object ExitMemory {
         Log.i(TAG, "已记住有效退出路线：$key → ${validActions.joinToString(" → ")}")
     }
 
-    fun markFailure(context: Context, targetPackage: String, wrongPackage: String, trapLabel: String) {
+    fun markFailure(context: Context, targetPackage: String, wrongPackage: String, trapLabel: String): Unit = synchronized(lock) {
         val items = load(context)
         val key = storageKey(targetPackage, wrongPackage, trapLabel)
         val old = items[key] ?: return
@@ -156,5 +158,5 @@ object ExitMemory {
         save(context, items)
     }
 
-    fun clear(context: Context) = save(context, emptyMap())
+    fun clear(context: Context): Unit = synchronized(lock) { save(context, emptyMap()) }
 }

@@ -15,6 +15,8 @@ data class Note(val title: String, val content: String, val time: Long)
 object NotesStore {
     private val gson = Gson()
     private val type = object : TypeToken<MutableList<Note>>() {}.type
+    // Agent 工作线程与 UI 线程并发读写：load→改→save 必须整段互斥，否则后写者覆盖前者丢便签
+    private val lock = Any()
 
     private fun file(c: Context) = java.io.File(c.filesDir, "notes.json")
 
@@ -32,26 +34,29 @@ object NotesStore {
         AtomicFiles.write(file(c), gson.toJson(notes))
     }
 
-    fun create(c: Context, title: String, content: String): String {
+    fun create(c: Context, title: String, content: String): String = synchronized(lock) {
         val notes = load(c)
-        notes.add(0, Note(title.ifBlank { "便签" }, content, System.currentTimeMillis()))
+        // time 兼作便签 id：同毫秒连记两条会撞 id（update/delete 会误改对象），挤 +1ms 保证唯一
+        var now = System.currentTimeMillis()
+        while (notes.any { it.time == now }) now++
+        notes.add(0, Note(title.ifBlank { "便签" }, content, now))
         save(c, notes)
-        return "已记下：「${title.ifBlank { "便签" }}」"
+        "已记下：「${title.ifBlank { "便签" }}」"
     }
 
-    fun read(c: Context, keyword: String): String {
+    fun read(c: Context, keyword: String): String = synchronized(lock) {
         val notes = load(c)
         if (notes.isEmpty()) return "（便签是空的）"
         val list = if (keyword.isBlank()) notes
         else notes.filter { it.title.contains(keyword) || it.content.contains(keyword) }
         if (list.isEmpty()) return "没有找到包含「$keyword」的便签"
         val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
-        return list.take(30).mapIndexed { i, n ->
+        list.take(30).mapIndexed { i, n ->
             "${i + 1}. 【${n.title}】${n.content} (${fmt.format(Date(n.time))}) [id=${n.time}]"
         }.joinToString("\n")
     }
 
-    fun update(c: Context, id: Long, newTitle: String, newContent: String): String {
+    fun update(c: Context, id: Long, newTitle: String, newContent: String): String = synchronized(lock) {
         val notes = load(c)
         val idx = notes.indexOfFirst { it.time == id }
         if (idx < 0) return "没有找到编号为 $id 的便签，请先 read_notes 确认编号"
@@ -61,14 +66,14 @@ object NotesStore {
             time = System.currentTimeMillis()
         )
         save(c, notes)
-        return "已更新便签：「${notes[idx].title}」"
+        "已更新便签：「${notes[idx].title}」"
     }
 
-    fun delete(c: Context, id: Long): String {
+    fun delete(c: Context, id: Long): String = synchronized(lock) {
         val notes = load(c)
         val target = notes.firstOrNull { it.time == id }
             ?: return "没有找到编号为 $id 的便签，请先 read_notes 确认编号"
         save(c, notes.filterNot { it.time == id })
-        return "已删除便签：「${target.title}」"
+        "已删除便签：「${target.title}」"
     }
 }

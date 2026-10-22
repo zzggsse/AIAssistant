@@ -65,30 +65,31 @@ object PathMemoryStore {
     }
 
     /** 保存或更新一条成功路径；如果同关键词+同包名已有路径则覆盖（保留 successCount 取较大值） */
-    fun upsert(context: Context, path: RecordedPath) {
-        if (path.steps.isEmpty()) return
-        val items = load(context)
-        val existingIdx = items.indexOfFirst {
-            it.targetPackage == path.targetPackage &&
-                it.taskKeywords.intersect(path.taskKeywords.toSet()).isNotEmpty()
+    fun upsert(context: Context, path: RecordedPath) = synchronized(this) {
+        if (path.steps.isNotEmpty()) {
+            val items = load(context)
+            val existingIdx = items.indexOfFirst {
+                it.targetPackage == path.targetPackage &&
+                    it.taskKeywords.intersect(path.taskKeywords.toSet()).isNotEmpty()
+            }
+            if (existingIdx >= 0) {
+                val old = items[existingIdx]
+                items[existingIdx] = path.copy(
+                    successCount = maxOf(old.successCount, path.successCount),
+                    lastUsedAt = System.currentTimeMillis()
+                )
+            } else {
+                items.add(path.copy(lastUsedAt = System.currentTimeMillis()))
+            }
+            // 最多存 30 条，超出时删掉最旧的
+            while (items.size > 30) items.removeAt(0)
+            save(context, items)
+            Log.i(TAG, "已保存路径：${path.targetAppName} ${path.steps.size}步")
         }
-        if (existingIdx >= 0) {
-            val old = items[existingIdx]
-            items[existingIdx] = path.copy(
-                successCount = maxOf(old.successCount, path.successCount),
-                lastUsedAt = System.currentTimeMillis()
-            )
-        } else {
-            items.add(path.copy(lastUsedAt = System.currentTimeMillis()))
-        }
-        // 最多存 30 条，超出时删掉最旧的
-        while (items.size > 30) items.removeAt(0)
-        save(context, items)
-        Log.i(TAG, "已保存路径：${path.targetAppName} ${path.steps.size}步")
     }
 
     /** 根据任务文本匹配已记录的路径 */
-    fun findMatch(context: Context, taskText: String, targetPackage: String? = null): RecordedPath? {
+    fun findMatch(context: Context, taskText: String, targetPackage: String? = null): RecordedPath? = synchronized(this) {
         val items = load(context)
         if (items.isEmpty()) return null
         val normalized = taskText.lowercase()
@@ -112,11 +113,11 @@ object PathMemoryStore {
             }
         }
         if (best != null) Log.i(TAG, "命中缓存路径：${best.targetAppName} ${best.steps.size}步 (score=$bestScore)")
-        return best
+        best
     }
 
     /** 回放成功后增加成功计数 */
-    fun markSuccess(context: Context, path: RecordedPath) {
+    fun markSuccess(context: Context, path: RecordedPath) = synchronized(this) {
         val items = load(context)
         val idx = items.indexOfFirst { it.targetPackage == path.targetPackage && it.taskKeywords == path.taskKeywords }
         if (idx >= 0) {
@@ -126,7 +127,7 @@ object PathMemoryStore {
     }
 
     /** 清空所有路径记忆 */
-    fun clear(context: Context) {
+    fun clear(context: Context) = synchronized(this) {
         save(context, emptyList())
     }
 
@@ -186,10 +187,20 @@ object PathMemoryStore {
             // 执行动作
             when (step.actionType) {
                 "tap" -> {
+                    // 与 LearningTask.replay 一致的防护：坐标无效时走文字自适应，绝不点屏幕外
+                    if ((step.actionX < 0 || step.actionY < 0) && step.actionLabel.isNotBlank()) {
+                        val adaptedResult = svc.clickText(step.actionLabel)
+                        Log.i(TAG, "回放第${idx + 1}步坐标无效，按文字自适应：${step.actionLabel} → $adaptedResult")
+                        if (!adaptedResult.startsWith("已点击")) {
+                            return ReplayResult(false, idx, idx, "第${idx + 1}步没有找到「${step.actionLabel}」")
+                        }
+                        AgentEngine.waitForActionSettle(toSettleAction(step.actionType), curFp)
+                        continue@stepLoop
+                    }
                     val screenWidth = svc.realScreenSize().first.toFloat()
                     val screenHeight = svc.realScreenSize().second.toFloat()
-                    val x = (step.actionX / 999.0 * screenWidth).toFloat()
-                    val y = (step.actionY / 999.0 * screenHeight).toFloat()
+                    val x = (step.actionX.coerceIn(0, 999) / 999.0 * screenWidth).toFloat()
+                    val y = (step.actionY.coerceIn(0, 999) / 999.0 * screenHeight).toFloat()
                     if (svc.tap(x, y) != true) {
                         return ReplayResult(false, idx, idx, "第${idx + 1}步点击失败")
                     }

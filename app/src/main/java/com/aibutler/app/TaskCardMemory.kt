@@ -27,6 +27,8 @@ object TaskCardMemory {
     private const val TAG = "TaskCardMemory"
     private val gson = Gson()
     private val type = object : TypeToken<MutableMap<String, CardStat>>() {}.type
+    // Agent 工作线程记账与 UI 线程读写并发：load→改→save 必须整段互斥，否则后写者覆盖前者丢数据
+    private val lock = Any()
 
     private fun file(context: Context) = java.io.File(context.filesDir, "task_card_memory.json")
 
@@ -43,7 +45,7 @@ object TaskCardMemory {
 
     private fun save(context: Context, items: Map<String, CardStat>) {
         try {
-            file(context).writeText(gson.toJson(items))
+            AtomicFiles.write(file(context), gson.toJson(items))
         } catch (e: Exception) {
             Log.w(TAG, "保存任务卡记忆失败", e)
         }
@@ -69,7 +71,7 @@ object TaskCardMemory {
 
     // ========== 记账 ==========
 
-    fun mark(context: Context, pkg: String, label: String, good: Boolean) {
+    fun mark(context: Context, pkg: String, label: String, good: Boolean): Unit = synchronized(lock) {
         val norm = normalizeLabel(label)
         if (pkg.isBlank() || !isReliableLabel(norm)) return
         val items = load(context)
@@ -137,7 +139,7 @@ object TaskCardMemory {
     }
 
     fun advise(context: Context, pkg: String, screenDump: String): String =
-        adviseFrom(load(context), pkg, screenDump)
+        synchronized(lock) { adviseFrom(load(context), pkg, screenDump) }
 
-    fun clear(context: Context) = save(context, emptyMap())
+    fun clear(context: Context): Unit = synchronized(lock) { save(context, emptyMap()) }
 }

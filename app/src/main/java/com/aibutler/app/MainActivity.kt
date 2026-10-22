@@ -242,17 +242,7 @@ class MainActivity : AppCompatActivity() {
         ensurePermissions()
 
         // 界面重建后，若后台线程仍在干活，让新界面持续刷新（每2秒）
-        val h = android.os.Handler(android.os.Looper.getMainLooper())
-        val tick = object : Runnable {
-            override fun run() {
-                if (busy) {
-                    adapter.notifyDataSetChanged()
-                    rv.scrollToPosition(adapter.items.size - 1)
-                }
-                h.postDelayed(this, 2000)
-            }
-        }
-        h.postDelayed(tick, 2000)
+        uiTickHandler.postDelayed(uiTick, 2000)
 
         // 调试令牌：仅用于 adb 远程测试（令牌打印在 logcat，只有有 adb 权限的人能看到）
         val sp = Prefs.get(this)
@@ -310,13 +300,14 @@ class MainActivity : AppCompatActivity() {
             if (msg.isNotEmpty()) {
                 etInput.setText("")
                 if (busy) {
-                        if (msg == activeTaskText || msg == pendingRun) {
+                        if (msg == activeTaskText || pendingRuns.contains(msg)) {
                             android.util.Log.i("AIButler", "AGLM dbg duplicate ignored while busy: $msg")
                             return
                         }
-                        // 只拦真正的重复下发；不同指令才允许取消当前任务并排队。
+                        // 只拦真正的重复下发；不同指令才允许取消当前任务并排队（同语义改为替换整条队列）
                     cancelRequested = true
-                    pendingRun = msg
+                    pendingRuns.clear()
+                    pendingRuns.add(msg)
                     android.util.Log.i("AIButler", "AGLM dbg send while busy: cancel current task, queue new round")
                 } else {
                     runAgent(msg, fromVoice = false)
@@ -343,10 +334,10 @@ class MainActivity : AppCompatActivity() {
 
     /** 权限补全后自动继续排队中的任务 */
     private fun resumePendingRunIfReady() {
-        val pending = pendingRun ?: return
+        val pending = pendingRuns.firstOrNull() ?: return
         if (busy) return
         if (!checkPermissionsOrLaunch()) return
-        pendingRun = null
+        pendingRuns.removeAt(0)
         Thread {
             if (!CaptureService.isActive()) {
                 var waited = 0
@@ -360,7 +351,7 @@ class MainActivity : AppCompatActivity() {
                     adapter.add(ChatAdapter.Msg("system", "▶️ 权限已就绪，继续执行刚才的任务"))
                     runAgent(pending, fromVoice = false)
                 } else {
-                    pendingRun = pending
+                    pendingRuns.add(0, pending)
                 }
             }
         }.start()
@@ -467,9 +458,9 @@ class MainActivity : AppCompatActivity() {
             CaptureService.start(this, resultCode, data)
             Toast.makeText(this, "✅ 屏幕视觉已开启，AI 能看懂图标了", Toast.LENGTH_LONG).show()
             observeCaptureStart()
-            val pending = pendingRun
+            val pending = pendingRuns.firstOrNull()
             if (pending != null) {
-                pendingRun = null
+                pendingRuns.removeAt(0)
                 Thread {
                     var waited = 0
                     while (!CaptureService.isActive() && waited < 8000) {
@@ -481,7 +472,7 @@ class MainActivity : AppCompatActivity() {
                             adapter.add(ChatAdapter.Msg("system", "▶️ 屏幕视觉已就绪，继续执行刚才的任务"))
                             runAgent(pending, fromVoice = false)
                         } else {
-                            pendingRun = pending
+                            pendingRuns.add(0, pending)
                             adapter.add(ChatAdapter.Msg("system", "⚠️ 屏幕视觉启动超时，任务已保留。请重新发一次指令。"))
                         }
                     }
@@ -898,6 +889,7 @@ class MainActivity : AppCompatActivity() {
         val preview = steps.take(8).joinToString("\n") { "• ${LearningTaskStore.describeStep(it)}" } +
                 if (steps.size > 8) "\n• ...共${steps.size}步" else ""
 
+        if (isFinishing || isDestroyed) return
         AlertDialog.Builder(this)
             .setTitle("保存录制任务")
             .setMessage("已记录 ${steps.size} 步：\n$preview\n\n目标：$targetName\n\n给这个任务起一个以后能直接说出的名字。")
@@ -968,6 +960,8 @@ class MainActivity : AppCompatActivity() {
                             .setPositiveButton("删除") { _, _ ->
                                 LearningTaskStore.delete(activity, task.id)
                                 Toast.makeText(activity, "已删除", Toast.LENGTH_SHORT).show()
+                                // 从列表里同步移除这一行，避免"已删还能点"（列表是 TextView 直接加在 container 上）
+                                container.removeView(this)
                             }
                             .show()
                         true
@@ -989,6 +983,11 @@ class MainActivity : AppCompatActivity() {
         val detail = task.steps.take(12).joinToString("\n") { "• ${LearningTaskStore.describeStep(it)}" } +
                 if (task.steps.size > 12) "\n• ...共${task.steps.size}步" else ""
         runOnUiThread {
+            if (isFinishing || isDestroyed) {
+                // 页面已销毁还弹框会 BadTokenException；不放行会让下面的 latch 干等 3 分钟
+                latch.countDown()
+                return@runOnUiThread
+            }
             AlertDialog.Builder(this)
                 .setTitle("回放「${task.name}」")
                 .setMessage("将要执行：\n$detail\n\n确认后助手会逐步执行；失败时会交给 AI 继续处理。")
@@ -1077,7 +1076,8 @@ class MainActivity : AppCompatActivity() {
 
         if (busy) {
             Toast.makeText(this, "⏳ AI 正忙，任务已排队，完成后自动开始", Toast.LENGTH_SHORT).show()
-            pendingRun = (pendingRun?.plus("\n") ?: "") + userText
+            pendingRuns.add(userText)
+            adapter.add(ChatAdapter.Msg("system", "已排队：$userText"))
             return
         }
         val directAlarm = NativeTaskRouter.parseAlarmRequest(userText)
@@ -1089,7 +1089,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (!isNativeDirectTask && !checkPermissionsOrLaunch()) {
-            pendingRun = userText
+            pendingRuns.add(userText)
             return
         }
         val pw = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
@@ -1537,9 +1537,8 @@ class MainActivity : AppCompatActivity() {
                         runAgent(userText, fromVoice, skipLearning = true)
                     }
                 } else {
-                    val next = pendingRun
+                    val next = pendingRuns.removeFirstOrNull()
                     if (next != null) {
-                        pendingRun = null
                         runOnUiThread {
                             adapter.add(ChatAdapter.Msg("system", "▶️ 排队的任务开始了"))
                             runAgent(next, fromVoice = false)
@@ -1601,8 +1600,21 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    private var pendingRun: String? = null
+    /** 忙时排队的任务（FIFO）：每条指令独立执行，不再用换行拼成一条 */
+    private val pendingRuns = mutableListOf<String>()
     private var projectionRequestActive = false
+
+    /** 界面重建后持续刷新 busy 状态的 tick（onDestroy 里统一移除回调，防止旧界面反复刷新泄漏） */
+    private val uiTickHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val uiTick = object : Runnable {
+        override fun run() {
+            if (busy) {
+                adapter.notifyDataSetChanged()
+                rv.scrollToPosition(adapter.items.size - 1)
+            }
+            uiTickHandler.postDelayed(this, 2000)
+        }
+    }
 
     /** 恢复普通模式：把暂停时保存的 plan/history 还原，从当前步骤继续 */
     private fun resumeNormalFrom(saved: PausedTask) {
@@ -1674,6 +1686,12 @@ class MainActivity : AppCompatActivity() {
             pausedTask = saved.copy(historySnapshot = history.deepCopy())
             runOnUiThread {
                 adapter.add(ChatAdapter.Msg("system", "⏸️ 又暂停了。说「继续」接着做"))
+                rv.scrollToPosition(adapter.items.size - 1)
+            }
+        } else if (round > MAX_ROUNDS) {
+            // 达到轮次上限退出时必须给用户一个明确交代，否则界面看起来像还在执行
+            runOnUiThread {
+                adapter.add(ChatAdapter.Msg("system", "⚠️ 连续执行${MAX_ROUNDS}轮未完成，先停在这里。可以再说「继续」接着做"))
                 rv.scrollToPosition(adapter.items.size - 1)
             }
         }
@@ -1836,7 +1854,10 @@ class MainActivity : AppCompatActivity() {
             var waitStallCount = 0
             var lastWaitDumpSig = ""
             var rewardWaitRounds = 0
+            var lastRewardCountdownSeconds: Int? = null
+            var rewardCountdownStallRounds = 0
             var blockedRewardFinishRounds = 0
+            var downloadWallExitRounds = 0
             var retryNote = ""
             var progressHoldRounds = 0
             val visitedPackages = LinkedHashSet<String>()
@@ -2100,9 +2121,22 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 // 页面文本指纹：本轮和上轮完全一致 = 冻结页（假倒计时/广告墙，等待无效）
+                val rewardCountdownSeconds = AgentEngine.rewardCountdownSeconds(compactGuardDump)
+                val countdownProgressed = AgentEngine.rewardCountdownProgressed(
+                    lastRewardCountdownSeconds,
+                    rewardCountdownSeconds
+                )
+                if (countdownProgressed) {
+                    rewardCountdownStallRounds = 0
+                } else if (rewardCountdownSeconds != null) {
+                    rewardCountdownStallRounds++
+                } else {
+                    rewardCountdownStallRounds = 0
+                }
+                lastRewardCountdownSeconds = rewardCountdownSeconds
                 val dumpSigNow = AgentEngine.fingerprint(screenDump).hashCode().toString()
                 val prevRoundDumpSig = lastDumpSig
-                val frozenPage = dumpSigNow == lastDumpSig
+                val frozenPage = dumpSigNow == lastDumpSig && !countdownProgressed
                 lastDumpSig = dumpSigNow
                 val commerceTaskPage = Regex(
                     "加入购物车|购买数量|立即抢购|立即购买|去支付|提交订单|确认订单",
@@ -2157,16 +2191,38 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 // 📵 下载墙页：这类广告页会自动触发APK下载/安装（用户投诉「老安装软件」的元凶），绝不停留
-                if (Regex("下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币").containsMatchIn(screenDump)) {
+                if (PageGuard.isDownloadWall(compactGuardDump)) {
                     if (lastCardLabel.isNotBlank() && appPkg == lastCardPkg && round - lastCardRound <= 6) {
                         TaskCardMemory.mark(this, appPkg, lastCardLabel, good = false)
                     }
                     lastCardLabel = ""
-                    AssistantAccessibilityService.instance?.pressBack()
-                    android.util.Log.i("AIButler", "AGLM 下载墙页自动返回: $appPkg")
+                    val exitLabel = PageGuard.safeAdExitLabel(screenDump)
+                    val exitResult = exitLabel?.let {
+                        AssistantAccessibilityService.instance?.clickText(it)
+                    }
+                    val usedExplicitExit = exitResult?.startsWith("已") == true
+                    if (!usedExplicitExit) {
+                        AssistantAccessibilityService.instance?.pressBack()
+                    }
+                    downloadWallExitRounds++
+                    android.util.Log.i(
+                        "AIButler",
+                        "AGLM download-wall exit #$downloadWallExitRounds: label=$exitLabel, explicit=$usedExplicitExit, pkg=$appPkg"
+                    )
                     runOnUiThread {
-                        adapter.add(ChatAdapter.Msg("system", "📵 发现下载/安装类广告页，已自动返回（防止装垃圾软件）"))
+                        adapter.add(
+                            ChatAdapter.Msg(
+                                "system",
+                                if (usedExplicitExit) "📵 发现下载/安装类广告页，已点击明确退出控件。"
+                                else "📵 发现下载/安装类广告页，已自动返回（防止装垃圾软件）"
+                            )
+                        )
                         rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    if (downloadWallExitRounds >= 3) {
+                        finalReply = "广告下载墙连续退出失败，为防止误下载已停止。请手动关闭广告后重试。"
+                        android.util.Log.i("AIButler", "AGLM download-wall exit breaker fired")
+                        break
                     }
                     ctx.add(JsonObject().apply {
                         addProperty("role", "user")
@@ -2256,28 +2312,18 @@ class MainActivity : AppCompatActivity() {
                 }
                 shortcutOnlyRounds = 0
                 val taskNote = "\n用户任务: $userText"
-                val compactScreen = screenDump.replace(Regex("\\s+"), "")
-                val rewardScreen = Regex(
-                    "签到|金币|积分|奖励|收益|赚钱|任务中心|去赚钱|宝箱|领取|倒计时",
-                    RegexOption.IGNORE_CASE
-                ).containsMatchIn(compactScreen)
                 val rewardDone = Regex(
                     "明日签到可领|今日已签到|已签到\\s*\\d+\\s*/\\s*\\d+\\s*天|领取成功|已成功领取|奖励已发放|已到账",
                     RegexOption.IGNORE_CASE
                 ).containsMatchIn(screenDump)
-                val explicitRewardCountdown = Regex(
-                    "(?:再看|还需|等待)[^0-9]{0,4}\\d+秒|倒计时[^0-9]{0,5}\\d+秒|赚钱中|任务未完成|不能领取|无法领取",
-                    RegexOption.IGNORE_CASE
-                ).containsMatchIn(compactScreen)
-                val rewardCountdown = !rewardDone && (
-                    explicitRewardCountdown ||
-                        (rewardScreen && Regex("\\d{1,2}:\\d{2}").containsMatchIn(compactScreen))
-                    )
+                val rewardCountdown = !rewardDone && rewardCountdownSeconds != null
                 val countdownNote = if (rewardCountdown) {
-                    if (frozenPage) {
+                    if (rewardCountdownStallRounds >= 3) {
                         "\n⏳ 系统读屏：页面有倒计时，但页面文本和上一步完全一样——倒计时没有走动，等待是无效的。请点击「继续观看/领取/放弃奖励」等按钮推进；点了也没反应就换其他金币入口；若确实没有可推进的入口，直接 finish 并汇报当前进度。"
                     } else {
-                        "\n⏳ 系统读屏：当前任务进度仍在倒计时/进行中。必须执行 Wait 等它完成，不要 Back、滑动或点击其他位置；倒计时结束后再点击当前页面的领取/继续入口。"
+                        val minutes = (rewardCountdownSeconds ?: 0) / 60
+                        val seconds = (rewardCountdownSeconds ?: 0) % 60
+                        "\n⏳ 系统读屏：当前奖励入口仍在倒计时（约${minutes}分${seconds}秒）。必须等待，不要点击禁用入口；倒计时结束后再点击当前页面的领取/继续入口。"
                     }
                 } else ""
                 // ===== 任务卡记忆：事件记账（点击任务卡后6轮内出现的证据）=====
@@ -2449,17 +2495,30 @@ class MainActivity : AppCompatActivity() {
                 // 退出确认弹窗在场上时（close_dialog/再看X秒/放弃奖励），不要抢模型的操作权强制等待
                 val exitDialogUp = screenDump.contains("close_dialog") ||
                     Regex("再看\\d+秒|放弃奖励|放弃本次奖励").containsMatchIn(screenDump)
-                if (rewardCountdown && !frozenPage) {
-                    if (!exitDialogUp && !answer.contains("Wait") && !answer.startsWith("finish") && rewardWaitRounds < 5) {
+                if (rewardCountdown && !exitDialogUp && rewardCountdownStallRounds < 3) {
+                    if (rewardWaitRounds >= 45) {
+                        val remaining = rewardCountdownSeconds ?: 0
+                        finalReply = "奖励入口仍在倒计时（约${remaining / 60}分${remaining % 60}秒）。已自动等待一段时间，为避免长期占用手机先停止；稍后可再说「继续」。"
+                        android.util.Log.i("AIButler", "AGLM reward cooldown wait limit reached: ${remaining}s")
+                        break
+                    }
+                    if (!answer.contains("Wait") && !answer.startsWith("finish")) {
                         rewardWaitRounds++
-                        answer = "do(action=\"Wait\", duration=\"8 seconds\")"
-                        android.util.Log.i("AIButler", "AGLM forced reward countdown wait #$rewardWaitRounds")
+                        val waitSeconds = if ((rewardCountdownSeconds ?: 0) > 90) 30 else 8
+                        answer = "do(action=\"Wait\", duration=\"$waitSeconds seconds\")"
+                        android.util.Log.i(
+                            "AIButler",
+                            "AGLM forced reward countdown wait #$rewardWaitRounds, left=${rewardCountdownSeconds}s"
+                        )
                         runOnUiThread {
-                            adapter.add(ChatAdapter.Msg("system", "⏳ 任务进度还在倒计时，先等待，完成后自动领取"))
+                            adapter.add(
+                                ChatAdapter.Msg(
+                                    "system",
+                                    "⏳ 奖励入口还在倒计时，先等待，完成后自动领取（约${rewardCountdownSeconds ?: 0}秒）"
+                                )
+                            )
                             rv.scrollToPosition(adapter.items.size - 1)
                         }
-                    } else if (!answer.contains("Wait")) {
-                        rewardWaitRounds = 0
                     }
                     if (answer.startsWith("finish") && !rewardDone &&
                         Regex("金币|积分|奖励|收益|赚钱|赚钱|签到").containsMatchIn(userText) &&
@@ -3250,6 +3309,9 @@ class MainActivity : AppCompatActivity() {
         return ExitRecoveryResult(false, actions, "屏幕上的退出候选没有带回目标应用")
     }
 
+    /** vision_frames 目录最多保留的截图张数（每轮任务存一张，不清会无限膨胀） */
+    private val MAX_VISION_FRAMES = 50
+
     private fun saveVisionFrame(round: Int, b64: String): File? {
         return runCatching {
             val data = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
@@ -3261,6 +3323,12 @@ class MainActivity : AppCompatActivity() {
                 bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 72, out)
             }
             bitmap.recycle()
+            // 每轮任务都存一张截图，不清的话存储无限膨胀；这里保留最新50张（本函数跑在任务线程，不卡UI）
+            dir.listFiles()?.sortedBy { it.lastModified() }?.let { olds ->
+                for (i in 0 until (olds.size - MAX_VISION_FRAMES)) {
+                    runCatching { olds[i].delete() }
+                }
+            }
             file
         }.getOrNull()
     }
@@ -3475,6 +3543,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        uiTickHandler.removeCallbacks(uiTick)
+        TaskControlBus.release()
         recognizer?.destroy()
         tts?.shutdown()
         super.onDestroy()

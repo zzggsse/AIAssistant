@@ -66,10 +66,13 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         synchronized(stepsLock) { recordedSteps.clear() }
         pendingClickStep = null
         pendingInputStep = null
+        pendingScrollStep = null
         pendingClickRunnable?.let(mainHandler::removeCallbacks)
         pendingInputRunnable?.let(mainHandler::removeCallbacks)
+        pendingScrollRunnable?.let(mainHandler::removeCallbacks)
         pendingClickRunnable = null
         pendingInputRunnable = null
+        pendingScrollRunnable = null
         synchronized(stepsLock) { recordedSteps.clear() }
         recording = false
         showOverlay()

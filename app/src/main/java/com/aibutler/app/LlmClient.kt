@@ -19,6 +19,17 @@ object LlmClient {
 
     data class Result(val content: String, val toolCalls: List<ToolCall>, val rawMessage: JsonObject)
 
+    /**
+     * 解析 200 响应体为 JsonObject。
+     * 网关偶发返回 HTML 错误页/空页，裸 parse 会抛 JsonSyntaxException 打穿上层，
+     * 这里统一转成带响应片段的 LlmException，报错信息可读。
+     */
+    private fun parseResponseObject(text: String): JsonObject = try {
+        JsonParser.parseString(text).asJsonObject
+    } catch (e: Exception) {
+        throw LlmException("接口返回不是合法 JSON：${text.take(200)}")
+    }
+
     // ========== 流式响应（SSE） ==========
 
     /**
@@ -88,7 +99,8 @@ object LlmClient {
                     val delta = choice.getAsJsonObject("delta") ?: continue
 
                     val contentDelta = delta.get("content")?.takeIf { !it.isJsonNull }?.asString
-                    if (!contentDelta.isNullOrBlank()) {
+                    // isNullOrEmpty 而不是 isNullOrBlank：纯空格/换行的 token 也是排版的一部分
+                    if (!contentDelta.isNullOrEmpty()) {
                         contentBuilder.append(contentDelta)
                         onDelta?.invoke(contentDelta)
                     }
@@ -201,7 +213,8 @@ object LlmClient {
                     }
                 }
                 // 1211/1214 = 网关渠道临时不可用，等几秒重试
-                if (code == 400 && text.contains("121") && attempt < 4) {
+                // 只精确匹配这两个码：contains("121") 太宽，普通 400 文案带个 121 数字就会白白重试 4 轮
+                if (code == 400 && (text.contains("1211") || text.contains("1214")) && attempt < 4) {
                     Thread.sleep(1500L * attempt)
                     continue
                 }
@@ -228,7 +241,7 @@ object LlmClient {
                     throw LlmException("HTTP $code：${text.take(500)}")
                 }
 
-                val root = JsonParser.parseString(text).asJsonObject
+                val root = parseResponseObject(text)
                 val choice = root.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject
                     ?: throw LlmException("接口返回里没有 choices：${text.take(200)}")
                 val msg = choice.getAsJsonObject("message")
@@ -266,7 +279,7 @@ object LlmClient {
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.let { InputStreamReader(it, StandardCharsets.UTF_8).readText() } ?: ""
             if (code !in 200..299) throw LlmException("HTTP $code：${text.take(200)}")
-            val root = JsonParser.parseString(text).asJsonObject
+            val root = parseResponseObject(text)
             val data = root.getAsJsonArray("data")
                 ?: throw LlmException("响应里没有 models 数据")
             val ids = ArrayList<String>()
@@ -329,7 +342,7 @@ object LlmClient {
                     else ""
                     throw LlmException("AutoGLM HTTP $code：${text.take(300)}$hint")
                 }
-                val root = JsonParser.parseString(text).asJsonObject
+                val root = parseResponseObject(text)
                 val message = root.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject
                     ?.getAsJsonObject("message")
                 val content = message?.get("content")?.takeIf { !it.isJsonNull }?.asString ?: ""
@@ -405,11 +418,19 @@ object LlmClient {
                     continue
                 }
                 if (code !in 200..299) throw LlmException("HTTP $code：${text.take(400)}")
-                val root = JsonParser.parseString(text).asJsonObject
+                val root = parseResponseObject(text)
                 val choice = root.getAsJsonArray("choices")?.firstOrNull()?.asJsonObject
                     ?: throw LlmException("视觉响应里没有 choices")
                 return choice.getAsJsonObject("message")?.get("content")
                     ?.takeIf { !it.isJsonNull }?.asString ?: ""
+            } catch (e: java.net.SocketTimeoutException) {
+                // 截图是大请求，视觉模型偶发响应慢：与 chat/chatAutoGLM 一致地自动重试
+                if (attempt < 3) {
+                    android.util.Log.w("AIButler", "视觉请求超时，第${attempt}次，重试中…")
+                    Thread.sleep(1200L * attempt)
+                    continue
+                }
+                throw LlmException("视觉请求超时（已重试${attempt - 1}次），请稍后再试")
             } finally {
                 conn?.disconnect()
             }

@@ -574,6 +574,32 @@ class AgentLogicTest {
         assertFalse(PageGuard.isUnsafeRewardTap("看直播领金币", "进入直播间"))
     }
 
+    @Test
+    fun 页面防护_下载墙优先点击安全退出() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 广告 完成互动领取金币福利 立即下载 红果免费短剧\n" +
+            "可点击: 继续互动 [500,1040]\n" +
+            "可点击: 坚持退出 [500,1180]\n" +
+            "可点击: 立即下载 [500,1950]"
+
+        assertTrue(PageGuard.isDownloadWall(dump))
+        assertEquals("坚持退出", PageGuard.safeAdExitLabel(dump))
+        assertFalse(PageGuard.isDownloadWall("当前应用: com.any.reward.app\n页面内容: 任务中心 看广告领金币"))
+    }
+
+    @Test
+    fun 奖励倒计时_读屏可识别且数字下降算进展() {
+        val cooldown = "限时专区 等倒计时结束再来吧~ 看广告赚金币 最高20000金币 15:43"
+        assertEquals(15 * 60 + 43, AgentEngine.rewardCountdownSeconds(cooldown))
+        assertEquals(48, AgentEngine.rewardCountdownSeconds("看广告奖励 还需48秒"))
+        assertEquals(90, AgentEngine.rewardCountdownSeconds("奖励 倒计时1分30秒"))
+        assertNull(AgentEngine.rewardCountdownSeconds("任务中心 看广告赚金币 20分钟看一次广告"))
+
+        assertTrue(AgentEngine.rewardCountdownProgressed(943, 913))
+        assertFalse(AgentEngine.rewardCountdownProgressed(943, 943))
+        assertFalse(AgentEngine.rewardCountdownProgressed(null, 913))
+    }
+
     // ========== protocolRetryNote：协议违规纠正提示（真机协议复读问题回归） ==========
 
     @Test

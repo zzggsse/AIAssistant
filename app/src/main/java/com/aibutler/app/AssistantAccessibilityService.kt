@@ -1008,9 +1008,13 @@ class AssistantAccessibilityService : AccessibilityService() {
                 }
             }
         }
+        // 兜底坐标点击前先校验元素可见：collectNodes 是全树搜索，可能拿到屏外/零尺寸节点，
+        // 点不可见元素却报成功会误导后续决策
         val n = nodes.first()
         val r = Rect()
         n.getBoundsInScreen(r)
+        val screen = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+        if (r.isEmpty || !Rect.intersects(r, screen)) return "目标元素当前不在屏幕可见范围内，已跳过点击"
         tap(r.exactCenterX(), r.exactCenterY())
         return "已用坐标点击「$query」"
     }
@@ -1057,11 +1061,12 @@ class AssistantAccessibilityService : AccessibilityService() {
         if (target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
             return "已在输入框填入：「$text」（注意：还没点发送）"
         }
-        // 兜底：用剪贴板粘贴
+        // 兜底：用剪贴板粘贴。粘贴失败要如实上报，否则模型以为输入成功会直接点发送
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("ai", text))
-        target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-        return "已尝试粘贴输入：「$text」（注意：还没点发送）"
+        val pasted = target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        return if (pasted) "已尝试粘贴输入：「$text」（注意：还没点发送）"
+        else "粘贴输入失败，请人工检查输入框内容是否为「$text」"
     }
 
     /** 点击"发送"等按钮时经常需要：输入完由 AI 再调 click_element(发送) */

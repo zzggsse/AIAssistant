@@ -557,6 +557,33 @@ object AgentEngine {
         return screenText.replace(Regex("\\d+"), "").replace(Regex("\\s+"), " ").trim()
     }
 
+    /** Read a live reward cooldown from screen text; digits are progress, not page noise. */
+    fun rewardCountdownSeconds(screenText: String): Int? {
+        val text = screenText.replace(Regex("\\s+"), "")
+        if (!Regex("金币|积分|奖励|收益|赚钱|签到|看广告|浏览广告").containsMatchIn(text)) return null
+
+        Regex("(?:再看|还需|等待|倒计时)(\\d{1,3})秒").find(text)?.let { match ->
+            return match.groupValues[1].toIntOrNull()?.takeIf { it > 0 }
+        }
+        Regex("(\\d{1,3})分(\\d{1,2})秒").find(text)?.let { match ->
+            val minutes = match.groupValues[1].toIntOrNull() ?: return null
+            val seconds = match.groupValues[2].toIntOrNull() ?: return null
+            return (minutes * 60 + seconds).takeIf { it > 0 }
+        }
+        return Regex("(?<!\\d)(\\d{1,3}):(\\d{2})(?!\\d)").findAll(text)
+            .mapNotNull { match ->
+                val minutes = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                val seconds = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                minutes * 60 + seconds
+            }
+            .maxOrNull()
+            ?.takeIf { it > 0 }
+    }
+
+    /** A cooldown going down is real task progress even though page structure looks unchanged. */
+    fun rewardCountdownProgressed(previousSeconds: Int?, currentSeconds: Int?): Boolean =
+        previousSeconds != null && currentSeconds != null && currentSeconds < previousSeconds
+
     /**
      * think-动作一致性检查：思考说要点底部导航[我/我的]，但给的协议坐标明显不在导航栏。
      * 真机教训：视觉脑在深色信息流上策略对、坐标错——think写"先点我"，Tap却落在[899,912]等
@@ -604,12 +631,12 @@ object AgentEngine {
         allowedApp: Pair<String, String>? = null
     ): AglmResult {
         val actions = parseAutoGlmActions(answer)
-        if (actions.isEmpty()) return execSingleAutoGLM(a, answer, realW, realH, userTask, screenDump)
+        if (actions.isEmpty()) return execSingleAutoGLM(a, answer, realW, realH, userTask, screenDump, allowedApp)
         if (actions.size == 1) {
             return execSingleAutoGLM(a, actions.first(), realW, realH, userTask, screenDump, allowedApp)
         }
         if (!actions.all(::batchActionAllowed)) {
-            return execSingleAutoGLM(a, actions.first(), realW, realH, userTask, screenDump)
+            return execSingleAutoGLM(a, actions.first(), realW, realH, userTask, screenDump, allowedApp)
         }
 
         val infos = ArrayList<String>()
@@ -639,20 +666,35 @@ object AgentEngine {
     ): AglmResult {
         val svc = AssistantAccessibilityService.instance
         fun norm(v: Int, total: Int) = ((v.coerceIn(0, 999) / 999.0) * total)
-        fun str(k: String): String? = Regex("$k=\"((?:[^\"\\\\]|\\\\.)*)\"").find(answer)?.groupValues?.get(1)
-        fun pt(k: String): Pair<Int, Int>? = Regex("$k=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer)?.let {
+        // 前置断言防止前缀碰撞：text=" 不能匹配到 context="/hint_text="，app=" 不能匹配到 package="
+        fun str(k: String): String? = Regex("(?<![A-Za-z_])$k=\"((?:[^\"\\\\]|\\\\.)*)\"").find(answer)?.groupValues?.get(1)
+        fun pt(k: String): Pair<Int, Int>? = Regex("(?<![A-Za-z_])$k=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer)?.let {
             Pair(it.groupValues[1].toInt(), it.groupValues[2].toInt())
         }
         if (answer.trimStart().startsWith("finish", ignoreCase = true)) {
-            val quoted = answer.indexOf('"')
-            val message = if (quoted >= 0) {
-                answer.substring(quoted + 1)
-                    .trim()
-                    .removeSuffix(")")
-                    .removeSuffix("\"")
-                    .trim()
-                .ifBlank { "任务结束" }
-            } else "任务结束"
+            fun legacyTail(): String {
+                val quoted = answer.indexOf('"')
+                return if (quoted >= 0) {
+                    answer.substring(quoted + 1)
+                        .trim()
+                        .removeSuffix(")")
+                        .removeSuffix("\"")
+                        .trim()
+                    .ifBlank { "任务结束" }
+                } else "任务结束"
+            }
+            // 用配对右括号截断 finish(message="...")：模型在 finish 后附话时，用户不会看到垃圾尾巴
+            val paren = answer.indexOf('(')
+            val message = if (paren >= 0) {
+                val end = findClosingParen(answer, paren)
+                if (end > paren) {
+                    val body = answer.substring(paren + 1, end)
+                    val quoted = body.indexOf('"')
+                    if (quoted >= 0) {
+                        body.substring(quoted + 1).trim().removeSuffix("\"").trim().ifBlank { "任务结束" }
+                    } else body.trim().ifBlank { "任务结束" }
+                } else legacyTail()
+            } else legacyTail()
             return AglmResult("任务结束", true, message)
         }
         val m = Regex("do\\(action=\"([^\"]+)\"(.*)", RegexOption.DOT_MATCHES_ALL).find(answer)
@@ -1153,6 +1195,8 @@ object AgentEngine {
                         scaled.compress(Bitmap.CompressFormat.JPEG, 55, bos)
                         val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
                         if (scaled !== bmp) scaled.recycle()
+                        // 压缩进 b64 后原图不再需要；此前只有 safeHits 分支回收了 bmp，视觉分支每轮泄漏一张整屏大图
+                        bmp.recycle()
                         val prompt = "这是手机屏幕截图，原始分辨率 ${sw}x${sh} 像素，截图已等比缩小到 ${outW}x${outH}。\n用户要完成的目标：${s("goal")}\n请输出：\n第1行：当前页面是什么。\n第2行起：列出屏幕上所有可见的、可能可以点击的元素（包括无文字的图标/按钮），每个一行，格式：说明 | 点击 x,y（坐标用原始分辨率 ${sw}x${sh} 像素）。\n最后一行：建议动作，格式为：点击 x,y 或 滑动 up/down/left/right 或 输入 具体内容 或 已完成 或 无法完成(原因)。\n注意：所有坐标必须换算成原始分辨率 ${sw}x${sh} 的像素坐标，不要给截图上的缩小坐标。看不清的文字要说明不确定。"
                         try {
                             "👁 视觉分析结果：\n" + LlmClient.chatVision(

@@ -175,6 +175,9 @@ object DeviceTools {
     }
 
     fun setAlarm(a: Activity, hour: Int, minute: Int, label: String): String {
+        // hour/minute 来自模型输出，越界值（如 25:70）在不同 ROM 上行为不定，入口先收进合法范围
+        val hour = hour.coerceIn(0, 23)
+        val minute = minute.coerceIn(0, 59)
         val i = Intent(AlarmClock.ACTION_SET_ALARM).apply {
             putExtra(AlarmClock.EXTRA_HOUR, hour)
             putExtra(AlarmClock.EXTRA_MINUTES, minute)
@@ -235,12 +238,13 @@ object DeviceTools {
                 if (!c.moveToFirst()) return "通讯录里没有找到包含「$nameOrKeyword」的联系人"
                 val results = StringBuilder()
                 var count = 0
-                while (c.moveToNext() && count < 10) {
+                // moveToFirst 已定位第一条，用 do-while 从第一条开始读，避免漏掉第一个匹配
+                do {
                     val name = c.getString(0) ?: "?"
                     val number = c.getString(1) ?: "?"
                     results.append("$name: $number\n")
                     count++
-                }
+                } while (c.moveToNext() && count < 10)
                 "找到的联系人：\n${results.toString().trim()}"
             } ?: "读取通讯录失败"
         } catch (e: Exception) {
@@ -248,12 +252,23 @@ object DeviceTools {
         }
     }
 
+    /** 找一个可见且可写的日历；很多机型没有 ID=1 的日历，写死会导致建日程静默失败 */
+    private fun writableCalendarId(cr: android.content.ContentResolver): Long? =
+        cr.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            arrayOf(CalendarContract.Calendars._ID),
+            "${CalendarContract.Calendars.VISIBLE}=1 AND " +
+                "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL}>=${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR}",
+            null, null
+        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+
     fun createCalendarEvent(a: Activity, title: String, beginMillis: Long, endMillis: Long, desc: String): String {
         if (title.isBlank()) return "日程标题不能为空"
         return try {
             val cr = a.contentResolver
+            val calId = writableCalendarId(cr) ?: return "手机上没有可写的日历，无法建日程"
             val values = android.content.ContentValues().apply {
-                put(CalendarContract.Events.CALENDAR_ID, 1)
+                put(CalendarContract.Events.CALENDAR_ID, calId)
                 put(CalendarContract.Events.TITLE, title)
                 if (desc.isNotBlank()) put(CalendarContract.Events.DESCRIPTION, desc)
                 put(CalendarContract.Events.DTSTART, beginMillis)

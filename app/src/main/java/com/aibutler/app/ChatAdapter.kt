@@ -29,6 +29,8 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         const val TYPE_VISION = 4
         /** 思考过程单条最长展示字符数，避免超长推理把列表撑爆（只截断展示，不影响发给模型的内容） */
         private const val MAX_THINK_CHARS = 4000
+        /** 视觉消息图片按目标边长降采样的上限（原始截图 2000+px，直接解码既慢又吃内存） */
+        private const val VISION_MAX_DIM = 1080
         // 界面被系统销毁重建后聊天内容仍在（干活线程与新界面共享同一份列表）
         val sharedItems = ArrayList<Msg>()
         private const val SAVE_DELAY_MS = 220L
@@ -39,9 +41,15 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
     val items: ArrayList<Msg> get() = sharedItems
 
     private val saveHandler = Handler(Looper.getMainLooper())
+    /** 会话保存/点赞落盘都丢到这个单线程执行器，主线程只负责刷 UI（conversations.json 大了以后 ANR 就出在这里） */
+    private val ioExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val saveRunnable = Runnable {
-        ConversationStore.saveCurrent(context, items)
-        onItemsChanged?.invoke()
+        // 拷贝快照再入队：items 是界面与干活线程共享的列表，直接引用可能在保存中途被增删
+        val snapshot = ArrayList(items)
+        ioExecutor.execute {
+            ConversationStore.saveCurrent(context, snapshot)
+            saveHandler.post { onItemsChanged?.invoke() }
+        }
     }
 
     val conversationId: String
@@ -188,15 +196,39 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
                 likeView.onLikeChanged = { count, liked ->
                     msg.likeCount = count
                     msg.liked = liked
-                    ConversationStore.saveCurrent(context, items)
+                    val snapshot = ArrayList(items)
+                    ioExecutor.execute { ConversationStore.saveCurrent(context, snapshot) }
                 }
             }
         }
         if (holder.viewType == TYPE_VISION) {
             holder.ivVision?.setImageBitmap(msg.imagePath?.let { path ->
-                runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
+                decodeSampled(path, VISION_MAX_DIM)
             })
         }
+    }
+
+    /**
+     * 两段式解码：先 inJustDecodeBounds 读尺寸，按目标边长算 inSampleSize（2的幂）再真解码。
+     * 绑定 ViewHolder 时在主线程调用，整图解码是滑动卡顿和 OOM 的主要来源。
+     */
+    private fun decodeSampled(path: String, maxDim: Int): android.graphics.Bitmap? {
+        val bounds = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var inSampleSize = 1
+        if (bounds.outHeight > maxDim || bounds.outWidth > maxDim) {
+            val halfH = bounds.outHeight / 2
+            val halfW = bounds.outWidth / 2
+            while (halfH / inSampleSize >= maxDim && halfW / inSampleSize >= maxDim) {
+                inSampleSize *= 2
+            }
+        }
+        return runCatching {
+            BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { this.inSampleSize = inSampleSize })
+        }.getOrNull()
     }
 
     class VHolder(root: android.view.View, val viewType: Int) : RecyclerView.ViewHolder(root) {
