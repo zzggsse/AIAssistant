@@ -38,6 +38,7 @@ class LearningModeController(private val service: AssistantAccessibilityService)
     private var overlayRoot: LinearLayout? = null
     private var overlayTitle: TextView? = null
     private var overlayActionButton: TextView? = null
+    private var overlayCloseButton: TextView? = null
     private var targetLocked = false
     private var pendingClickStep: LearningStep? = null
     private var pendingClickRunnable: Runnable? = null
@@ -64,15 +65,7 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         learningTargetPackage = targetPackage
         targetLocked = lockTarget
         synchronized(stepsLock) { recordedSteps.clear() }
-        pendingClickStep = null
-        pendingInputStep = null
-        pendingScrollStep = null
-        pendingClickRunnable?.let(mainHandler::removeCallbacks)
-        pendingInputRunnable?.let(mainHandler::removeCallbacks)
-        pendingScrollRunnable?.let(mainHandler::removeCallbacks)
-        pendingClickRunnable = null
-        pendingInputRunnable = null
-        pendingScrollRunnable = null
+        clearPendingSteps()
         synchronized(stepsLock) { recordedSteps.clear() }
         recording = false
         showOverlay()
@@ -84,6 +77,14 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         overlayVisible = false
         hideOverlay()
         return hadSteps
+    }
+
+    fun cancel() {
+        recording = false
+        overlayVisible = false
+        clearPendingSteps()
+        synchronized(stepsLock) { recordedSteps.clear() }
+        hideOverlay()
     }
 
     fun takeRecording(): List<LearningStep> {
@@ -305,6 +306,17 @@ class LearningModeController(private val service: AssistantAccessibilityService)
             }
             root.addView(overlayActionButton)
 
+            overlayCloseButton = TextView(service).apply {
+                text = "X"
+                contentDescription = "关闭录制"
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE)
+                setPadding(dp(8), dp(6), dp(8), dp(6))
+                setOnClickListener { cancel() }
+            }
+            root.addView(overlayCloseButton)
+
             overlayRoot = root
             service.addToOverlay(root) {
                 gravity = Gravity.TOP or Gravity.START
@@ -324,15 +336,7 @@ class LearningModeController(private val service: AssistantAccessibilityService)
 
     fun beginRecording() {
         synchronized(stepsLock) { recordedSteps.clear() }
-        pendingClickStep = null
-        pendingInputStep = null
-        pendingScrollStep = null
-        pendingClickRunnable?.let(mainHandler::removeCallbacks)
-        pendingInputRunnable?.let(mainHandler::removeCallbacks)
-        pendingScrollRunnable?.let(mainHandler::removeCallbacks)
-        pendingClickRunnable = null
-        pendingInputRunnable = null
-        pendingScrollRunnable = null
+        clearPendingSteps()
         recording = true
         mainHandler.post {
             overlayTitle?.text = "录制中 · 0步"
@@ -345,6 +349,19 @@ class LearningModeController(private val service: AssistantAccessibilityService)
         overlayRoot = null
         overlayTitle = null
         overlayActionButton = null
+        overlayCloseButton = null
+    }
+
+    private fun clearPendingSteps() {
+        pendingClickStep = null
+        pendingInputStep = null
+        pendingScrollStep = null
+        pendingClickRunnable?.let(mainHandler::removeCallbacks)
+        pendingInputRunnable?.let(mainHandler::removeCallbacks)
+        pendingScrollRunnable?.let(mainHandler::removeCallbacks)
+        pendingClickRunnable = null
+        pendingInputRunnable = null
+        pendingScrollRunnable = null
     }
 
     private fun findNodeByLabel(label: String): AccessibilityNodeInfo? {
