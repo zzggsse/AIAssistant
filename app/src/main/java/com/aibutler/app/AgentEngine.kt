@@ -750,6 +750,13 @@ object AgentEngine {
      */
     const val PROGRESS_STALL_ABORT_AT = 16
 
+    /** 一轮是否没有实际推进：页面指纹不变时，换动作也不能重置防卡死计数 */
+    fun isNoProgressRound(
+        pageChanged: Boolean,
+        passiveVideoTask: Boolean = false,
+        countdownProgressed: Boolean = false
+    ): Boolean = !(pageChanged || passiveVideoTask || countdownProgressed)
+
     /** 无进展熔断的中止文案 */
     val PROGRESS_STALL_ABORT_MESSAGE: String
         get() = "已连续${PROGRESS_STALL_ABORT_AT}轮页面毫无变化，防卡死保护自动停止任务。" +

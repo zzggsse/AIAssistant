@@ -217,6 +217,32 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
+        // 开放式任务挂机上限：点一下弹数字输入（5-240分钟），到点询问是否继续、不点默认继续
+        val tvSessionCapValue = findViewById<android.widget.TextView>(R.id.tvSessionCapValue)
+        fun renderSessionCap() {
+            tvSessionCapValue.text = "${Prefs.openEndedSessionMinutes(this)}分钟"
+        }
+        renderSessionCap()
+        findViewById<android.view.View>(R.id.rowSessionCap).setOnClickListener {
+            val input = EditText(this).apply {
+                hint = "5-240 分钟"
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                setText(Prefs.openEndedSessionMinutes(this@SettingsActivity).toString())
+            }
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("开放式任务挂机上限（分钟）")
+                .setMessage("「刷视频赚金币」这类不说停的任务，每挂机这么久暂停问一次要不要继续；2分钟内没点就默认继续挂机。")
+                .setView(input)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存") { _, _ ->
+                    val v = input.text.toString().toIntOrNull() ?: return@setPositiveButton
+                    Prefs.setOpenEndedSessionMinutes(this, v)
+                    renderSessionCap()
+                    Toast.makeText(this, "已保存：每轮挂机${Prefs.openEndedSessionMinutes(this)}分钟", Toast.LENGTH_SHORT).show()
+                }
+                .show()
+        }
+
         swDeveloperMode.setCheckedWithoutCallback(Prefs.developerMode(this))
         llDeveloperPanel.visibility = if (swDeveloperMode.isChecked) android.view.View.VISIBLE else android.view.View.GONE
         swDeveloperMode.onStateChanged = { checked ->

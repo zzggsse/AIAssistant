@@ -187,7 +187,7 @@ object PathMemoryStore {
             // 执行动作
             when (step.actionType) {
                 "tap" -> {
-                    // 与 LearningTask.replay 一致的防护：坐标无效时走文字自适应，绝不点屏幕外
+                    // 防护：坐标无效时走文字自适应，绝不点屏幕外
                     if ((step.actionX < 0 || step.actionY < 0) && step.actionLabel.isNotBlank()) {
                         val adaptedResult = svc.clickText(step.actionLabel)
                         Log.i(TAG, "回放第${idx + 1}步坐标无效，按文字自适应：${step.actionLabel} → $adaptedResult")

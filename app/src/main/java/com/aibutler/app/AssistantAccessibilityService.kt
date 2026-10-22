@@ -40,6 +40,12 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 enum class TaskVerdict { CONFIRMED, MARK_FAILED }
 
+/**
+ * 开放式任务(刷视频赚金币等)挂机到点的询问结果。
+ * CONTINUE=继续挂机；END=收工；null=宽限期内没人点——按用户约定默认继续挂机。
+ */
+enum class SessionAsk { CONTINUE, END }
+
 /** 停止悬浮球的点击/拖动边界：非拖动的抬手都视为用户要打开确认窗。 */
 object StopBubbleGesturePolicy {
     fun shouldTogglePopupOnActionUp(dragging: Boolean): Boolean = !dragging
@@ -69,6 +75,8 @@ class AssistantAccessibilityService : AccessibilityService() {
     private var stopBubbleCollapseRunnable: Runnable? = null
     private var successOverlayRoot: View? = null
     private var successConfirmLatch: CountDownLatch? = null
+    private var sessionAskOverlayRoot: View? = null
+    private var sessionAskLatch: CountDownLatch? = null
     private var actionPreviewRoot: ActionTargetView? = null
 
     /** 任务开始时调用：在屏幕边缘挂一个可收进侧边的「停止任务」气泡 */
@@ -136,6 +144,42 @@ class AssistantAccessibilityService : AccessibilityService() {
             mainHandler.post {
                 successOverlayRoot?.let(::removeFromOverlay)
                 successOverlayRoot = null
+            }
+        }
+    }
+
+    /**
+     * 开放式任务挂机到点的询问窗：继续挂机 / 收工。
+     * 返回 null = 宽限期内没人点（用户可能不在手机旁）——按约定默认继续挂机，不误杀任务。
+     * 等待按 200ms 分片轮询，停止气泡/取消请求最迟 200ms 就能打断等待。
+     */
+    fun showSessionContinueAsk(summary: String, graceMs: Long): SessionAsk? {
+        val latch = CountDownLatch(1)
+        var answer: SessionAsk? = null
+        mainHandler.post {
+            sessionAskOverlayRoot?.let(::removeFromOverlay)
+            sessionAskOverlayRoot = buildSessionContinueAsk(summary) { value ->
+                if (answer == null) answer = value
+                latch.countDown()
+            }
+            sessionAskOverlayRoot?.let { addToOverlay(it, modal = true) }
+        }
+        sessionAskLatch = latch
+        return try {
+            var remaining = graceMs
+            while (remaining > 0 && answer == null) {
+                val slice = if (remaining > 200) 200 else remaining
+                if (latch.await(slice, TimeUnit.MILLISECONDS)) break
+                remaining -= slice
+            }
+            answer
+        } catch (_: InterruptedException) {
+            null
+        } finally {
+            if (sessionAskLatch === latch) sessionAskLatch = null
+            mainHandler.post {
+                sessionAskOverlayRoot?.let(::removeFromOverlay)
+                sessionAskOverlayRoot = null
             }
         }
     }
@@ -447,6 +491,87 @@ class AssistantAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** 开放式任务挂机到点的询问卡片：继续挂机=绿，收工=红；点背景=不表态(调用方按继续处理) */
+    private fun buildSessionContinueAsk(
+        summary: String,
+        onAnswer: (SessionAsk?) -> Unit
+    ): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            isClickable = true
+            setPadding(dp(18), dp(18), dp(18), dp(16))
+            background = roundedBackground(Color.WHITE, dp(16).toFloat())
+        }
+
+        card.addView(TextView(this).apply {
+            text = "⏰ 挂机时间到"
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#171717"))
+        })
+
+        card.addView(TextView(this).apply {
+            text = summary
+            textSize = 14f
+            setTextColor(Color.parseColor("#444444"))
+            setPadding(0, dp(10), 0, 0)
+        })
+
+        card.addView(TextView(this).apply {
+            text = "不点的话会默认继续挂机；停止气泡随时可用。"
+            textSize = 12f
+            setTextColor(Color.parseColor("#999999"))
+            setPadding(0, dp(8), 0, 0)
+        })
+
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, dp(16), 0, 0)
+        }
+        val keepGoing = TextView(this).apply {
+            text = "▶ 继续挂机"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = roundedBackground(Color.parseColor("#52C41A"), dp(18).toFloat())
+            setOnClickListener { onAnswer(SessionAsk.CONTINUE) }
+        }
+        val endNow = TextView(this).apply {
+            text = "⏹ 收工"
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = roundedBackground(Color.parseColor("#FF4D4F"), dp(18).toFloat())
+            setOnClickListener { onAnswer(SessionAsk.END) }
+        }
+        buttons.addView(keepGoing)
+        buttons.addView(endNow, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { marginStart = dp(12) })
+        card.addView(buttons)
+
+        card.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+            marginStart = dp(22)
+            marginEnd = dp(22)
+        }
+
+        return FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#66000000"))
+            setOnClickListener { onAnswer(null) }
+            addView(card)
+        }
+    }
+
     fun addToOverlay(
         view: View,
         modal: Boolean = false,
@@ -600,12 +725,6 @@ class AssistantAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        serviceInfo = serviceInfo.apply {
-            eventTypes = eventTypes or AccessibilityEvent.TYPE_VIEW_SCROLLED
-        }
-        LearningModeController(this).also {
-            LearningModeController.instance = it
-        }
         VisualSampleController(this).also {
             VisualSampleController.instance = it
         }
@@ -614,8 +733,6 @@ class AssistantAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        LearningModeController.instance?.stop()
-        LearningModeController.instance = null
         VisualSampleController.instance?.hide()
         VisualSampleController.instance = null
         taskOverlayRoot?.let(::removeFromOverlay)
@@ -631,11 +748,9 @@ class AssistantAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        LearningModeController.instance?.onAccessibilityEvent(event)
-    }
-
     override fun onInterrupt() {}
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     fun realScreenSize(): Pair<Int, Int> {
         val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager

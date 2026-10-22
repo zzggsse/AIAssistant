@@ -151,6 +151,72 @@ class AgentLogicTest {
         assertNull(NativeTaskRouter.parseNoteRequest("便签写入abcd然后发消息"))
     }
 
+    // ========== TaskRouter：统一路由（本地直达出口 / 快捷指令 / 大脑选择） ==========
+
+    @Test
+    fun 路由_本地直达_闹钟() {
+        val d = TaskRouter.parseNativeDirect("帮我设一个八点钟的闹钟")
+        assertTrue(d is TaskRouter.NativeDirect.Alarm)
+        assertEquals(8, (d as TaskRouter.NativeDirect.Alarm).req.hour)
+    }
+
+    @Test
+    fun 路由_本地直达_便签() {
+        val d = TaskRouter.parseNativeDirect("去便签写入abcd")
+        assertTrue(d is TaskRouter.NativeDirect.Note)
+        assertEquals("abcd", (d as TaskRouter.NativeDirect.Note).req.content)
+    }
+
+    @Test
+    fun 路由_本地直达_未命中与否决仍交还模型() {
+        assertTrue(TaskRouter.parseNativeDirect("打开淘宝") is TaskRouter.NativeDirect.None)
+        assertTrue(TaskRouter.parseNativeDirect("帮我取消八点的闹钟") is TaskRouter.NativeDirect.None)
+    }
+
+    @Test
+    fun 路由_快捷指令判定() {
+        assertTrue(TaskRouter.isQuickTask("打开淘宝"))
+        assertFalse(TaskRouter.isQuickTask("打开淘宝然后搜索手机")) // 组合指令不能跳过规划
+        assertFalse(TaskRouter.isQuickTask("什么是量子力学")) // 非动词开头
+    }
+
+    @Test
+    fun 路由_聊天兜底识别() {
+        assertTrue(TaskRouter.looksLikeChat("你好"))
+        assertTrue(TaskRouter.looksLikeChat("什么是量子力学"))
+        // 快捷指令优先于聊天兜底（与旧行为一致）
+        assertFalse(TaskRouter.looksLikeChat("打开淘宝"))
+    }
+
+    @Test
+    fun 路由_大脑决策() {
+        val chatPlan = AgentEngine.TaskPlan("chat", "", emptyList(), "")
+        val r1 = TaskRouter.routeBrain("你好", chatPlan)
+        assertTrue(r1.chatPlan)
+        assertTrue(r1.skipAutoGlm)
+        assertFalse(r1.launchTargetApp)
+
+        val taskPlan = AgentEngine.TaskPlan(
+            "screen_task", "淘宝",
+            listOf(AgentEngine.PlanStep(1, "打开淘宝", "当前应用是淘宝")), "出现搜索结果"
+        )
+        val r2 = TaskRouter.routeBrain("打开淘宝", taskPlan)
+        assertFalse(r2.skipAutoGlm)
+        assertTrue(r2.launchTargetApp)
+        assertFalse(r2.nativeToolFirst)
+
+        // Bug#3：命中原生工具的指令不进视觉脑，且注入"原生工具优先"
+        val r3 = TaskRouter.routeBrain("记一下明天开会", taskPlan)
+        assertTrue(r3.skipAutoGlm)
+        assertTrue(r3.nativeToolFirst)
+        assertFalse(r3.launchTargetApp)
+
+        // 无计划（规划失败降级）+ 快捷指令：仍允许进视觉脑
+        val r4 = TaskRouter.routeBrain("打开淘宝", null)
+        assertFalse(r4.skipAutoGlm)
+        assertTrue(r4.launchTargetApp)
+    }
+
     @Test
     fun 闹钟工具明确会打开时钟应用() {
         val tools = AgentEngine.toolsJson()
@@ -851,5 +917,15 @@ class AgentLogicTest {
             "可点击: 开宝箱得金币 [820,180]"
         val kept = AgentEngine.correctTapToScreenElement(Pair(500, 500), "帮我开宝箱", dump)
         assertEquals(Pair(500, 500), kept)
+    }
+
+    @Test
+    fun 无进展保护_换着点也不能绕过页面冻结计数() {
+        var noProgress = 0
+        repeat(16) {
+            if (AgentEngine.isNoProgressRound(pageChanged = false)) noProgress++ else noProgress = 0
+        }
+        assertTrue("连续换动作但页面不变必须熔断", noProgress >= AgentEngine.PROGRESS_STALL_ABORT_AT)
+        assertEquals(0, if (AgentEngine.isNoProgressRound(pageChanged = true)) 1 else 0)
     }
 }

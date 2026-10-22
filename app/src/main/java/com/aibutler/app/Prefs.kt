@@ -131,6 +131,12 @@ object Prefs {
         get(c).edit().putBoolean("evalLog", v).apply()
     }
 
+    /** 开放式任务(刷视频赚金币等)每轮挂机上限(分钟)。到点询问是否继续；不点默认继续。 */
+    fun openEndedSessionMinutes(c: Context): Int = get(c).getInt("openEndedSessionMinutes", TaskCompletionVerifier.DEFAULT_SESSION_MINUTES)
+    fun setOpenEndedSessionMinutes(c: Context, v: Int) {
+        get(c).edit().putInt("openEndedSessionMinutes", v.coerceIn(5, 240)).apply()
+    }
+
     /** 把旧版本里关闭的思考展示和快速模式切到可见状态；用户之后仍可在设置里改。 */
     fun ensureThinkingVisible(c: Context) {
         val sp = get(c)
