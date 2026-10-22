@@ -64,6 +64,11 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
                 pillButton("点选样本") { captureCurrentScreen(selectByTap = true) },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             )
+            bar.addView(View(service), LinearLayout.LayoutParams(dp(7), 1))
+            bar.addView(
+                pillButton("关闭") { hide() },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            )
             root = bar
             service.addToOverlay(bar) {
                 gravity = Gravity.TOP or Gravity.START
@@ -191,6 +196,9 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
         val frame = screen ?: return
         val candidates = rects
         hide()
+        // hide() 会清空捕获状态；确认窗必须继续使用刚才截到的同一帧和同一组候选区域。
+        screen = frame
+        rects = candidates
         selected = -1
         val packageName = service.currentPackage()
         val panel = LinearLayout(service).apply {
@@ -291,7 +299,6 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
                 background = rounded(Color.parseColor("#FFE5E7EB"), dp(16f))
                 setOnClickListener {
                     hide()
-                    show()
                 }
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -333,7 +340,10 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
             val crop = Bitmap.createBitmap(frame, rect.left, rect.top, rect.width(), rect.height())
             val saved = library.add(crop, label, packageName)
             toast(if (saved == null) "样本保存失败" else "已保存「$label」")
-            if (saved != null) selectedRow?.append("  · 已保存")
+            if (saved != null) {
+                selectedRow?.append("  · 已保存")
+                mainHandler.postDelayed({ hide() }, 450L)
+            }
         } catch (_: Exception) {
             toast("样本保存失败")
         }
