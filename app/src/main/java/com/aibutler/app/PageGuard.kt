@@ -93,6 +93,28 @@ object PageGuard {
         ).containsMatchIn(text)
     }
 
+    /**
+     * Task-center pages are meant to be left by passive video tasks. Require either a strong
+     * title/entry or several reward features, so a coin badge in the normal feed is not enough.
+     */
+    fun isRewardTaskCenter(screenDump: String): Boolean {
+        val text = normalize(screenDump)
+        val strong = Regex(
+            "任务中心|赚钱任务|去赚钱|看广告(赚|得|领)|看视频(赚|得|领)金币|现金收益|金币收益|立即提现"
+        ).containsMatchIn(text)
+        if (strong) return true
+
+        val weak = listOf(
+            Regex("金币|现金|奖励|收益"),
+            Regex("签到|每日签到"),
+            Regex("提现|兑换"),
+            Regex("邀请好友|新人专区|限时专区"),
+            Regex("开宝箱|宝箱"),
+            Regex("看广告|浏览广告|广告任务")
+        ).count { it.containsMatchIn(text) }
+        return weak >= 3
+    }
+
     /** Install/download walls often cover the task page and swallow system Back. */
     fun isDownloadWall(screenDump: String): Boolean = Regex(
         "下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币",

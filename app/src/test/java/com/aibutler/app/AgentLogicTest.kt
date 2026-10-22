@@ -575,6 +575,42 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 刷视频赚金币_按普通视频流处理() {
+        assertTrue(AgentEngine.isPassiveVideoTask("去抖音极速版刷视频赚金币"))
+        assertTrue(AgentEngine.isPassiveVideoTask("看视频刷金币"))
+        assertTrue(AgentEngine.isPassiveVideoTask("浏览一会儿短视频"))
+    }
+
+    @Test
+    fun 明确广告或任务指令_不按普通视频流处理() {
+        assertFalse(AgentEngine.isPassiveVideoTask("看广告赚金币"))
+        assertFalse(AgentEngine.isPassiveVideoTask("去任务中心做任务赚金币"))
+        assertFalse(AgentEngine.isPassiveVideoTask("先签到，再看视频"))
+        assertTrue(AgentEngine.isPassiveVideoTask("不要做任务，直接刷视频"))
+    }
+
+    @Test
+    fun 普通刷视频_误入任务中心可被读屏兜底识别() {
+        val taskCenter = "当前应用: com.any.video.app\n" +
+            "页面内容: 去赚钱 现金收益 签到 邀请好友\n" +
+            "可点击: 看广告赚金币 [500,300]"
+        val feedWithCoinBadge = "当前应用: com.any.video.app\n" +
+            "页面内容: 推荐视频 视频标题\n" +
+            "可点击: 金币 [940,120]"
+
+        assertTrue(PageGuard.isRewardTaskCenter(taskCenter))
+        assertFalse(PageGuard.isRewardTaskCenter(feedWithCoinBadge))
+    }
+
+    @Test
+    fun autoGlmPrompt_刷视频赚金币优先于任务中心() {
+        val sp = AgentEngine.autoGlmSystemPrompt()
+        assertTrue(sp.contains("即使同时提到金币、赚钱"))
+        assertTrue(sp.contains("只适用于明确的广告/任务指令"))
+        assertTrue(sp.contains("如果已经进入任务中心页，立即 Back 回视频流"))
+    }
+
+    @Test
     fun 返回意图_左上角Tap改走系统返回() {
         val answer = "<think>当前是赚钱任务页，目标视频在外面，先返回到视频播放页面。</think>" +
             "<answer>do(action=\"Tap\", element=[48,48])</answer>"

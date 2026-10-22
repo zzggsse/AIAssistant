@@ -1859,6 +1859,7 @@ class MainActivity : AppCompatActivity() {
             var rewardCountdownStallRounds = 0
             var blockedRewardFinishRounds = 0
             var downloadWallExitRounds = 0
+            var rewardCenterExitRounds = 0
             var retryNote = ""
             var lastActionFeedback = ""    // 上一轮「动作→页面变化」反馈，注入下一轮 screenInfo 后清空
             var jumpBlockStreak = 0        // 连续跳转/下载类拦截次数：模型反复撞同一拦截时升级处理
@@ -2127,7 +2128,12 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 // 页面文本指纹：本轮和上轮完全一致 = 冻结页（假倒计时/广告墙，等待无效）
-                val rewardCountdownSeconds = AgentEngine.rewardCountdownSeconds(compactGuardDump)
+                val passiveVideoTask = AgentEngine.isPassiveVideoTask(userText)
+                val rewardCountdownSeconds = if (passiveVideoTask) {
+                    null
+                } else {
+                    AgentEngine.rewardCountdownSeconds(compactGuardDump)
+                }
                 val countdownProgressed = AgentEngine.rewardCountdownProgressed(
                     lastRewardCountdownSeconds,
                     rewardCountdownSeconds
@@ -2162,6 +2168,36 @@ class MainActivity : AppCompatActivity() {
                             "🛑 系统提示：刚才误入了商品/下单页，已自动按返回键。下一轮重新读屏，只执行与用户任务直接相关的免费入口，不要点击商品、店铺、购物车或安装类任务。"
                         )
                     })
+                    continue
+                }
+                if (AgentEngine.isPassiveVideoTask(userText) && PageGuard.isRewardTaskCenter(compactGuardDump)) {
+                    if (lastCardLabel.isNotBlank() && appPkg == lastCardPkg && round - lastCardRound <= 6) {
+                        TaskCardMemory.mark(this, appPkg, lastCardLabel, good = false)
+                    }
+                    lastCardLabel = ""
+                    rewardCenterExitRounds++
+                    AssistantAccessibilityService.instance?.pressBack()
+                    android.util.Log.i(
+                        "AIButler",
+                        "AGLM passive-video task left reward center #$rewardCenterExitRounds, pkg=$appPkg"
+                    )
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "🎯 普通刷视频任务误入赚钱页，已返回视频流。"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    if (rewardCenterExitRounds >= 3) {
+                        finalReply = "普通刷视频任务连续识别到任务中心页，已自动停止。请手动回到视频流后重试。"
+                        break
+                    }
+                    ctx.add(JsonObject().apply {
+                        addProperty("role", "user")
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：这是普通刷视频任务，不是明确的赚钱任务。刚才误入任务中心/赚钱页，已按返回。" +
+                                "下一轮回到首页或视频流后必须 Swipe 上滑一段视频，再 Wait 观看；不要点击金币、红包、宝箱、任务卡或赚钱入口。"
+                        )
+                    })
+                    Thread.sleep(1500)
                     continue
                 }
                 // 拍摄/创作页对签到任务是高危路径：一旦进入倒计时或编辑页，很容易连续操作到发布。
@@ -2318,7 +2354,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 shortcutOnlyRounds = 0
                 val taskNote = "\n用户任务: $userText"
-                val rewardDone = Regex(
+                val rewardDone = !passiveVideoTask && Regex(
                     "明日签到可领|今日已签到|已签到\\s*\\d+\\s*/\\s*\\d+\\s*天|领取成功|已成功领取|奖励已发放|已到账",
                     RegexOption.IGNORE_CASE
                 ).containsMatchIn(screenDump)
@@ -2454,6 +2490,16 @@ class MainActivity : AppCompatActivity() {
                     else -> ""
                 }
                 if (protocolMatch == null && fallbackAction != null && !answer.endsWith(")")) answer += ")"
+                if (passiveVideoTask && answer.startsWith("finish", ignoreCase = true)) {
+                    answer = "do(action=\"Swipe\", start=[500,650], end=[500,300])"
+                    retryNote = "\n⚠️ 系统提示：普通刷视频是开放任务，没有明确数量或时间目标时不能 finish。" +
+                        "已改为上滑观看下一段视频；继续保持 Swipe → Wait 循环。"
+                    android.util.Log.i("AIButler", "AGLM blocked passive-video finish, forced swipe")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "⏳ 普通刷视频任务继续观看，不提前结束"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                }
                 val thinkTag = Regex("(?s)<think>(.*?)</think>", RegexOption.IGNORE_CASE)
                     .find(raw)?.groupValues?.get(1)?.trim().orEmpty()
                 // 优先用 <think> 标签，其次用模型单独返回的推理字段
@@ -2570,6 +2616,7 @@ class MainActivity : AppCompatActivity() {
                     blockedRewardFinishRounds = 0
                 }
                 if (visionProgressHint && rewardWaitRounds == 0 && !frozenPage &&
+                    !passiveVideoTask &&
                     Regex("金币|积分|奖励|收益|赚钱").containsMatchIn(userText) &&
                     answer.contains("Tap")
                 ) {
@@ -2581,6 +2628,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (progressHoldRounds > 0 && !frozenPage &&
+                    !passiveVideoTask &&
                     Regex("金币|积分|奖励|收益|赚钱").containsMatchIn(userText) &&
                     Regex("金币|奖励|收益|任务").containsMatchIn(screenDump)
                 ) {
@@ -2700,7 +2748,8 @@ class MainActivity : AppCompatActivity() {
                 lastActionSig = actionSig
                 if (alternationCount >= 2) {
                     android.util.Log.i("AIButler", "AGLM alternation breaker triggered")
-                    val rewardishTask = Regex("金币|积分|奖励|收益|赚钱").containsMatchIn(userText) &&
+                    val rewardishTask = !passiveVideoTask &&
+                        Regex("金币|积分|奖励|收益|赚钱").containsMatchIn(userText) &&
                         Regex("金币|奖励|收益|任务").containsMatchIn(screenDump)
                     if (rewardishTask) {
                         answer = "do(action=\"Wait\", duration=\"10 seconds\")"
