@@ -166,9 +166,6 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
             }
         }
         catcher.addView(top)
-        mainHandler.postDelayed({
-            if (root === catcher) show()
-        }, 12000L)
 
         root = catcher
         service.addToOverlay(catcher) {
@@ -385,7 +382,17 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
                 gravity = Gravity.CENTER
                 setPadding(dp(16), dp(8), dp(16), dp(8))
                 background = rounded(Color.parseColor("#FF0F766E"), dp(16f))
-                setOnClickListener { saveSelected(labelInput.text.toString(), packageName) }
+                setOnClickListener {
+                    saveSelected(labelInput.text.toString(), packageName) {
+                        labelInput.setText("")
+                        selectedRow?.background = rounded(Color.parseColor("#F3F4F6"), dp(8f))
+                        selectedRow = null
+                        selected = -1
+                        previewImage.visibility = View.GONE
+                        previewHint.text = "已保存，继续选择下一个候选"
+                        previewHint.visibility = View.VISIBLE
+                    }
+                }
             },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = dp(7)
@@ -427,7 +434,7 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
         }
     }
 
-    private fun saveSelected(label: String, packageName: String) {
+    private fun saveSelected(label: String, packageName: String, onSaved: () -> Unit) {
         val frame = screen
         val rect = rects.getOrNull(selected)
         if (frame == null || rect == null) {
@@ -443,7 +450,7 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
             val saved = library.add(crop, label, packageName)
             toast(if (saved == null) "样本保存失败" else "已保存「$label」")
             if (saved != null) {
-                mainHandler.postDelayed({ hide() }, 450L)
+                onSaved()
             }
         } catch (_: Exception) {
             toast("样本保存失败")
