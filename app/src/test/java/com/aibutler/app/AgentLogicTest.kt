@@ -100,6 +100,7 @@ class AgentLogicTest {
         val sp = AgentEngine.autoGlmSystemPrompt()
         assertTrue("缺少任务开始时启动目标应用的约定", sp.contains("任务开始时允许并应当 Launch"))
         assertTrue("缺少执行中防误跳转的约定", sp.contains("点击前判断入口是否可能离开目标应用"))
+        assertTrue("激励广告倒计时不能提前退出", sp.contains("倒计时没结束绝不能 Swipe、Back、点×或点下载"))
     }
 
     @Test
@@ -410,6 +411,39 @@ class AgentLogicTest {
     }
 
     @Test
+    fun tap_金币任务不误点购物返利CTA() {
+        // 真实案例：广告底部红色「购买后确认收货最高得200000金币」被模型当成赚金币入口误点
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 限时福利 购买后确认收货最高得200000金币\n" +
+            "可点击: 购买后确认收货最高得200000金币 [540,1800]"
+        val r = exec("do(action=\"Tap\", element=[540,1800])", task = "看广告刷金币", dump = dump)
+        assertEquals("__JUMP_BLOCK__", r.message)
+        assertTrue(r.info.contains("高风险入口"))
+    }
+
+    @Test
+    fun tap_金币任务不误点广告报错反馈按钮() {
+        // 广告底部的「报错/反馈」（常为红色）是投诉入口不是关闭按钮，点了会打开反馈页
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 精选好物 报错\n" +
+            "可点击: 报错 [1000,2300]"
+        val r = exec("do(action=\"Tap\", element=[1000,2300])", task = "看广告刷金币", dump = dump)
+        assertEquals("__JUMP_BLOCK__", r.message)
+        assertTrue(r.info.contains("报错/反馈"))
+    }
+
+    @Test
+    fun tap_购物任务不误伤返利词表里的购买按钮() {
+        // 用户任务本身就是购物时，返利CTA词表不拦（购买是正当目标）
+        val dump = "当前应用: com.sankuai.meituan\n" +
+            "页面内容: 商品详情 立即购买\n" +
+            "可点击: 立即购买 [540,1800]"
+        val r = exec("do(action=\"Tap\", element=[540,1800])", task = "下单买一杯奶茶", dump = dump)
+        // 没有被拦截才会走到执行层（无障碍服务为 null 时返回 NO_A11Y）
+        assertEquals(DeviceTools.NO_A11Y, r.info)
+    }
+
+    @Test
     fun wait_解析秒数并执行() {
         val r = exec("do(action=\"Wait\", duration=\"1 seconds\")")
         assertEquals("已等待1秒", r.info)
@@ -655,6 +689,23 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_返利CTA与报错反馈按钮() {
+        // 购物返利 CTA：承诺的金币要先花钱购物才拿得到，对刷金币任务是纯陷阱
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "购买后确认收货最高得200000金币"))
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "0元购大额免单"))
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "下单返现金"))
+        // 原有高风险语义不回归
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "加入购物车"))
+        // 用户任务本身是购物类时不拦（正当目标）
+        assertFalse(PageGuard.isUnsafeRewardTap("下单买手机返金币", "立即购买"))
+        // 报错/反馈：投诉入口不是关闭按钮；任务本身要反馈/报错/投诉时放行
+        assertTrue(PageGuard.isAdFeedbackTap("帮我关掉这个广告", "报错"))
+        assertTrue(PageGuard.isAdFeedbackTap("帮我关掉这个广告", "问题反馈"))
+        assertFalse(PageGuard.isAdFeedbackTap("去这个App提个反馈", "意见反馈"))
+        assertFalse(PageGuard.isAdFeedbackTap("帮我在抖音举报这个视频", "举报"))
+    }
+
+    @Test
     fun 刷视频赚金币_按普通视频流处理() {
         assertTrue(AgentEngine.isPassiveVideoTask("去抖音极速版刷视频赚金币"))
         assertTrue(AgentEngine.isPassiveVideoTask("看视频刷金币"))
@@ -861,6 +912,11 @@ class AgentLogicTest {
         val cooldown = "限时专区 等倒计时结束再来吧~ 看广告赚金币 最高20000金币 15:43"
         assertEquals(15 * 60 + 43, AgentEngine.rewardCountdownSeconds(cooldown))
         assertEquals(48, AgentEngine.rewardCountdownSeconds("看广告奖励 还需48秒"))
+        assertEquals(
+            16,
+            AgentEngine.rewardCountdownSeconds("页面内容: 广告 16秒后可领奖励 下载并打开得10000金币")
+        )
+        assertEquals(29, AgentEngine.rewardCountdownSeconds("广告 29秒后可领取奖励"))
         assertEquals(90, AgentEngine.rewardCountdownSeconds("奖励 倒计时1分30秒"))
         assertNull(AgentEngine.rewardCountdownSeconds("任务中心 看广告赚金币 20分钟看一次广告"))
 

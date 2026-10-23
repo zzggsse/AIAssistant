@@ -83,14 +83,30 @@ object PageGuard {
     fun isForbiddenPayment(task: String, screenDump: String): Boolean =
         isPaymentOrOrderPage(screenDump) && !isCommerceTask(task)
 
-    /** Reward pages often contain a “live-room bonus” ad card; that is not a safe reward entry. */
+    /**
+     * Reward pages often contain a “live-room bonus” ad card; that is not a safe reward entry.
+     * 2026-10-23 扩展：补上购物返利 CTA 词表（真实案例：广告上红色的「购买后确认收货最高得
+     * 200000金币」被模型当成赚金币入口误点）。这类按钮承诺的金币要"先花钱购物"才拿得到，
+     * 对看广告/刷金币任务是纯陷阱。用户任务本身就是购物类（下单/购买…）时不拦，那是正当目标。
+     */
     fun isUnsafeRewardTap(task: String, label: String): Boolean {
-        if (!isRewardTask(task) || isLiveIntentTask(task)) return false
+        if (!isRewardTask(task) || isLiveIntentTask(task) || isCommerceTask(task)) return false
         val text = normalize(label)
         return Regex(
-            "直播|开播|主播|立即支付|去支付|确认支付|提交订单|确认订单|立即购买|立即抢购|" +
-                "加入购物车|进店|商品详情|下载|安装|试玩|去体验"
+            "直播|开播|主播|立即支付|去支付|确认支付|提交订单|确认订单|" +
+                "购买|确认收货|下单|抢购|拼单|拼团|0元|一分钱|一分购|包邮|" +
+                "进店|商品详情|加入购物车|去逛逛|下载|安装|试玩|去体验"
         ).containsMatchIn(text)
+    }
+
+    /**
+     * 广告 SDK 的「报错/反馈」按钮（常为红色，多在广告底部）是向广告平台投诉的入口，
+     * 不是关闭按钮——模型找关闭控件时经常被它的“错”字和醒目红色带偏，点了会打开
+     * 反馈页而不是关掉广告。用户任务本身就是要反馈/报错/投诉时放行。
+     */
+    fun isAdFeedbackTap(task: String, label: String): Boolean {
+        if (Regex("反馈|报错|投诉|举报").containsMatchIn(normalize(task))) return false
+        return Regex("报错|错误上报|问题反馈|意见反馈|反馈").containsMatchIn(normalize(label))
     }
 
     /**

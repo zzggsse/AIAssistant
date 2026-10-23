@@ -1937,8 +1937,9 @@ class MainActivity : AppCompatActivity() {
                     Thread.sleep(1200)
                     continue
                 }
-                // 📵 下载墙页：这类广告页会自动触发APK下载/安装（用户投诉「老安装软件」的元凶），绝不停留
-                if (PageGuard.isDownloadWall(compactGuardDump)) {
+                // 📵 下载墙页：这类广告页会自动触发APK下载/安装（用户投诉「老安装软件」的元凶），绝不停留。
+                // 激励广告例外：「N秒后可领奖励」说明奖励还没发，提前 Back 只会把已完成时长作废。
+                if (PageGuard.isDownloadWall(compactGuardDump) && rewardCountdownSeconds == null) {
                     if (lastCardLabel.isNotBlank() && appPkg == lastCardPkg && round - lastCardRound <= 6) {
                         TaskCardMemory.mark(this, appPkg, lastCardLabel, good = false)
                     }
@@ -2301,9 +2302,11 @@ class MainActivity : AppCompatActivity() {
                 } else if (!screenDump.contains("页面可能仍在加载")) {
                     loadingWaitCount = 0
                 }
-                // 退出确认弹窗在场上时（close_dialog/再看X秒/放弃奖励），不要抢模型的操作权强制等待
-                val exitDialogUp = screenDump.contains("close_dialog") ||
-                    Regex("再看\\d+秒|放弃奖励|放弃本次奖励").containsMatchIn(screenDump)
+                // 退出确认弹窗在场上时（close_dialog/再看X秒/放弃奖励），不要抢模型的操作权强制等待；
+                // 但激励广告倒计时未结束时例外，仍然先等进度，避免模型顺手点「坚持退出」。
+                val exitDialogUp = !rewardCountdown &&
+                    (screenDump.contains("close_dialog") ||
+                    Regex("再看\\d+秒|放弃奖励|放弃本次奖励").containsMatchIn(screenDump))
                 if (rewardCountdown && !exitDialogUp && rewardCountdownStallRounds < 3) {
                     if (rewardWaitRounds >= 45) {
                         val remaining = rewardCountdownSeconds ?: 0
@@ -2741,8 +2744,9 @@ class MainActivity : AppCompatActivity() {
                         addProperty("role", "user")
                         addProperty(
                             "content",
-                            "🛑 系统提示：上一步坐标命中疑似跳转/下载/更新类入口（被拦元素：${blockedTarget.ifBlank { "未知" }}），已拦截，没有点击。$escapeNote" +
-                                "绝不要再点这个位置或同类入口；请重新看最新截图，改选目标应用内部的原生任务；看不准就 Swipe 或 Back。"
+                            "🛑 系统提示：上一步坐标命中疑似跳转/下载/更新/广告引流类入口（被拦元素：${blockedTarget.ifBlank { "未知" }}），已拦截，没有点击。$escapeNote" +
+                                "绝不要再点这个位置或同类入口；若当前是广告/落地页，只允许点击含「关闭/跳过」字样的控件或 do(action=\"Back\") 离开；" +
+                                "否则请重新看最新截图，改选目标应用内部的原生入口；看不准就 Swipe 或 Back。"
                         )
                     })
                     continue
