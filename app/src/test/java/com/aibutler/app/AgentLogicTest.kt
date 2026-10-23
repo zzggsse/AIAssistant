@@ -671,6 +671,8 @@ class AgentLogicTest {
     @Test
     fun 明确广告或任务指令_不按普通视频流处理() {
         assertFalse(AgentEngine.isPassiveVideoTask("看广告赚金币"))
+        assertFalse(AgentEngine.isPassiveVideoTask("去抖音极速版看广告赚金币"))
+        assertFalse(AgentEngine.isPassiveVideoTask("去抖音极速版看广告刷金币"))
         assertFalse(AgentEngine.isPassiveVideoTask("去任务中心做任务赚金币"))
         assertFalse(AgentEngine.isPassiveVideoTask("先签到，再看视频"))
         assertTrue(AgentEngine.isPassiveVideoTask("不要做任务，直接刷视频"))
@@ -690,11 +692,35 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 明确看广告任务_视频流可识别并可路由到赚钱入口() {
+        val feed = "当前应用: com.any.video.app\n" +
+            "页面内容: 推荐 关注 你好baby\n" +
+            "可点击: 点赞 [940,900]\n" +
+            "可点击: 评论 [940,1000]\n" +
+            "可点击: 分享 [940,1100]\n" +
+            "可点击: 赚钱 {,Button} [914,120]"
+        val taskCenter = "当前应用: com.any.video.app\n" +
+            "页面内容: 去赚钱 现金收益 签到 邀请好友\n" +
+            "可点击: 看广告赚金币 [500,300]"
+        val feedWithoutSafeEntry = "当前应用: com.any.video.app\n" +
+            "页面内容: 推荐 视频标题\n" +
+            "可点击: 点赞 [940,900]\n" +
+            "可点击: 下载并打开得10000金币 [499,1800]"
+
+        assertTrue(PageGuard.isVideoFeed(feed))
+        assertEquals("赚钱", PageGuard.rewardEntryLabel(feed))
+        assertFalse(PageGuard.isVideoFeed(taskCenter))
+        assertNull(PageGuard.rewardEntryLabel(feedWithoutSafeEntry))
+    }
+
+    @Test
     fun autoGlmPrompt_刷视频赚金币优先于任务中心() {
         val sp = AgentEngine.autoGlmSystemPrompt()
         assertTrue(sp.contains("即使同时提到金币、赚钱"))
         assertTrue(sp.contains("只适用于明确的广告/任务指令"))
         assertTrue(sp.contains("如果已经进入任务中心页，立即 Back 回视频流"))
+        assertTrue(sp.contains("绝不能在普通视频流 Swipe 刷视频"))
+        assertTrue(sp.contains("用户明确说「看广告/刷广告」时不适用本条"))
     }
 
     @Test

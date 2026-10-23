@@ -115,6 +115,35 @@ object PageGuard {
         return weak >= 3
     }
 
+    /**
+     * The ordinary short-video feed is the wrong place for an explicit “watch ad” task.
+     * Require both feed navigation and player affordances, and exclude reward centers,
+     * so a coin badge alone cannot trigger forced routing.
+     */
+    fun isVideoFeed(screenDump: String): Boolean {
+        if (isRewardTaskCenter(screenDump)) return false
+        val navigation = Regex("推荐|关注|首页|商城").containsMatchIn(normalize(screenDump))
+        val playerAffordance = Regex("点赞|评论|分享|转发|全屏观看|点击进入直播间|相关搜索")
+            .containsMatchIn(normalize(screenDump))
+        return navigation && playerAffordance
+    }
+
+    /**
+     * Generic route back to a task/reward page from the feed: only semantic entries,
+     * never download/commerce/live traps.
+     */
+    fun rewardEntryLabel(screenDump: String): String? {
+        val lineRegex = Regex("(?:^|\\n)可点击:\\s*(.+?)\\s*\\[-?\\d+,-?\\d+\\]")
+        val unsafe = Regex("下载|安装|试玩|购买|支付|下单|抢购|直播|主播|开宝箱")
+        val wanted = Regex("看广告|广告任务|任务中心|去赚钱|赚钱|现金收益|金币收益|红包")
+        lineRegex.findAll(screenDump).forEach { match ->
+            val label = match.groupValues[1].substringBefore("{").trim()
+            val text = normalize(label)
+            if (wanted.containsMatchIn(text) && !unsafe.containsMatchIn(text)) return label
+        }
+        return null
+    }
+
     /** Install/download walls often cover the task page and swallow system Back. */
     fun isDownloadWall(screenDump: String): Boolean = Regex(
         "下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币",

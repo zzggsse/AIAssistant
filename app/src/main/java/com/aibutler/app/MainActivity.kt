@@ -1524,6 +1524,7 @@ class MainActivity : AppCompatActivity() {
             var blockedRewardFinishRounds = 0
             var downloadWallExitRounds = 0
             var rewardCenterExitRounds = 0
+            var adTaskFeedRounds = 0
             var retryNote = ""
             var lastActionFeedback = ""    // 上一轮「动作→页面变化」反馈，注入下一轮 screenInfo 后清空
             var jumpBlockStreak = 0        // 连续跳转/下载类拦截次数：模型反复撞同一拦截时升级处理
@@ -1936,6 +1937,39 @@ class MainActivity : AppCompatActivity() {
                     })
                     Thread.sleep(1200)
                     continue
+                }
+                // 明确「看广告」任务不能在普通视频流里滑动。系统按语义代点赚钱/看广告入口，
+                // 避免视觉模型把「刷金币」误解成开放式刷视频。
+                val explicitAdTask = !passiveVideoTask && PageGuard.isRewardTask(userText) &&
+                    Regex("看广告|刷广告|浏览广告").containsMatchIn(userText)
+                if (explicitAdTask && PageGuard.isVideoFeed(compactGuardDump)) {
+                    adTaskFeedRounds++
+                    if (adTaskFeedRounds >= 2) {
+                        val entryLabel = PageGuard.rewardEntryLabel(screenDump)
+                        val entryResult = entryLabel?.let {
+                            AssistantAccessibilityService.instance?.clickText(it)
+                        }
+                        if (entryResult?.startsWith("已") == true) {
+                            android.util.Log.i("AIButler", "AGLM explicit ad task routed via $entryLabel")
+                            runOnUiThread {
+                                adapter.add(ChatAdapter.Msg("system", "🧭 看广告任务已从视频流切到「$entryLabel」任务页。"))
+                                rv.scrollToPosition(adapter.items.size - 1)
+                            }
+                            adTaskFeedRounds = 0
+                            Thread.sleep(1500)
+                            continue
+                        }
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "🛑 系统提示：用户要求看广告赚钱，当前是普通视频流，继续滑动是错误路线。" +
+                                    "必须点击「赚钱/去赚钱/看广告」入口进入任务页；找不到就点右上角红包挂件或[我/我的]页里的金币任务入口，绝不能 Swipe。"
+                            )
+                        })
+                    }
+                } else {
+                    adTaskFeedRounds = 0
                 }
                 // 激励广告被暂停时，「继续观看」是恢复进度的明确入口；必须由系统先代点，
                 // 不能把无文字/低对比弹窗交给视觉模型去猜坐标。
