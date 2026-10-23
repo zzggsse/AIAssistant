@@ -675,6 +675,32 @@
                 android:lineSpacingExtra="4dp"
                 android:text="提示：无障碍服务是 AI 替你操作的核心能力。涉及付款、转账的确认步骤，AI 不会替你点，最后一步由你手动确认。" />
         </LinearLayout>
+
+        <!-- 关于卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:orientation="vertical"
+            android:background="@drawable/bg_settings_card"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="关于"
+                android:textStyle="bold"
+                android:textSize="16sp"
+                android:textColor="@color/colorTextPrimary" />
+
+            <TextView
+                android:id="@+id/tvAppVersion"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:textSize="13sp"
+                android:textColor="@color/colorTextSecondary" />
+        </LinearLayout>
     </LinearLayout>
     </ScrollView>
 </LinearLayout>

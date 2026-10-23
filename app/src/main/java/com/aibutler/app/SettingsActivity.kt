@@ -59,6 +59,9 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(R.layout.activity_settings)
 
         findViewById<ImageView>(R.id.btnBack).setOnClickListener { finish() }
+        findViewById<TextView>(R.id.tvAppVersion).text = "v${
+            runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "unknown"
+        }"
 
         spinner = findViewById(R.id.spinnerVendor)
         etBaseUrl = findViewById(R.id.etBaseUrl)
