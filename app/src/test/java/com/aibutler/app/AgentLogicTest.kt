@@ -672,6 +672,25 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_广告奖励任务必须拦截消费送礼入口() {
+        val adTask = "看广告赚金币"
+        assertTrue(PageGuard.isSpendActionTap(adTask, "发红包"))
+        assertTrue(PageGuard.isSpendActionTap(adTask, "礼物面板"))
+        assertTrue(PageGuard.isSpendActionTap(adTask, "赠送礼物"))
+        assertTrue(PageGuard.isSpendActionTap(adTask, "查看详情", "直播间发红包"))
+        assertTrue(PageGuard.isSpendActionTap(adTask, "去参与", "送礼打赏"))
+        assertFalse(PageGuard.isSpendActionTap(adTask, "观看广告领金币"))
+        assertFalse(PageGuard.isSpendActionTap(adTask, "领红包"))
+    }
+
+    @Test
+    fun 页面防护_任务点名消费动作时放行() {
+        assertFalse(PageGuard.isSpendActionTap("帮我发红包", "发红包"))
+        assertFalse(PageGuard.isSpendActionTap("给主播送礼物", "礼物面板"))
+        assertTrue(PageGuard.isSpendActionTap("不要发红包，只看广告", "发红包"))
+    }
+
+    @Test
     fun 页面防护_投币抽奖活动页按任务对齐() {
         assertTrue(PageGuard.isRewardActivityPage("立即投币报名 完整参与金币必暴涨", "看广告赚金币"))
         assertTrue(PageGuard.isRewardActivityPage("立即参与 千万金币瓜分", "看广告赚金币"))

@@ -992,6 +992,17 @@ object AgentEngine {
                 else if (!targetAppMatched && !taskWantsJump && jumpPattern.containsMatchIn(nearbyLabel)) {
                     AglmResult("🛑 已拦截疑似跳转其他应用：${nearbyLabel.take(100)}", false, "__JUMP_BLOCK__")
                 }
+                else if (!isExplicitDismiss && PageGuard.isSpendActionTap(userTask, nearbyLabel, cardContext)) {
+                    android.util.Log.i(
+                        "AIButler",
+                        "Blocked spend/action tap: task=$userTask label=$nearbyLabel context=$cardContext"
+                    )
+                    AglmResult(
+                        "🛑 已拦截消费/送礼入口：${nearbyLabel.take(100)}。当前任务没有要求发红包、送礼或付费。",
+                        false,
+                        "__COMMERCE_BLOCK__"
+                    )
+                }
                 else if (!PageGuard.hasMissionVerbs(userTask) && PageGuard.isUnsafeRewardTap(userTask, nearbyLabel)) {
                     android.util.Log.i("AIButler", "Blocked unsafe reward tap: $nearbyLabel")
                     AglmResult(
@@ -1217,6 +1228,7 @@ object AgentEngine {
             val maxDistance = if (candidate.second >= 100000) 250000 else 5000
             candidate.second >= 40 && candidate.third <= maxDistance &&
                 !(!PageGuard.hasMissionVerbs(userTask) && PageGuard.isUnsafeRewardTap(userTask, candidate.first.first)) &&
+                !PageGuard.isSpendActionTap(userTask, candidate.first.first) &&
                 !(PageGuard.hasMissionVerbs(userTask) && PageGuard.isOffMissionTap(userTask, candidate.first.first))
         }
         val target = scored.maxWithOrNull(compareBy({ it.second }, { -it.third }))?.first ?: return modelPoint!!

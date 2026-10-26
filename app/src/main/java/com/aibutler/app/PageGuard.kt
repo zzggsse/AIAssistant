@@ -105,6 +105,36 @@ object PageGuard {
     fun isForbiddenPayment(task: String, screenDump: String): Boolean =
         isPaymentOrOrderPage(screenDump) && !isCommerceTask(task)
 
+    /**
+     * 消费/送礼入口和奖励目标本身是两类目的地。即便任务提到“广告”等动词，
+     * 也不能因为“有任务动词”而放行红包、礼物、充值、支付类按钮。
+     * 用户任务确实点名同一类消费动作时才允许，例如“帮我发红包”“给主播送礼物”。
+     */
+    fun isSpendActionTap(task: String, label: String, context: String = ""): Boolean {
+        val target = normalize(label)
+        val nearby = normalize(context)
+        if (!spendActionEntry.containsMatchIn(target) && !spendActionEntry.containsMatchIn(nearby)) {
+            return false
+        }
+        return !taskWantsSpendAction(task)
+    }
+
+    private val spendActionEntry = Regex(
+        "发红包|红包封面|红包雨|送礼物|赠送礼物|刷礼物|礼物面板|打赏|" +
+            "充值|快币|余额|付款|支付|下单|购买|抢购|加入购物车|提交订单|确认订单"
+    )
+
+    private fun taskWantsSpendAction(task: String): Boolean =
+        spendActionIntent.containsMatchIn(
+            Regex("(?:不要|别再?|禁止|避免|不得)[^，。,；;！!？?\\n]*")
+                .replace(normalize(task), "")
+        )
+
+    private val spendActionIntent = Regex(
+        "发红包|发(?:一?个|个)?.{0,8}红包|送(?:一?个|个)?.{0,8}礼物|赠送礼物|刷礼物|打赏|" +
+            "充值|快币|付款|支付|下单|购买|抢购|购物|加入购物车|提交订单|确认订单"
+    )
+
     /** Reward pages often contain a “live-room bonus” ad card; that is not a safe reward entry. */
     fun isUnsafeRewardTap(task: String, label: String): Boolean {
         if (!isRewardTask(task) || isLiveIntentTask(task)) return false
@@ -266,7 +296,11 @@ object PageGuard {
      */
     fun rewardEntryLabel(screenDump: String): String? {
         val lineRegex = Regex("(?:^|\\n)可点击:\\s*(.+?)\\s*\\[-?\\d+,-?\\d+\\]")
-        val unsafe = Regex("下载|安装|试玩|购买|支付|下单|抢购|直播|主播|开宝箱|跳过广告|关闭广告|屏蔽广告|广告设置|广告管理")
+        val unsafe = Regex(
+            "发红包|红包封面|红包雨|送礼物|赠送礼物|刷礼物|礼物面板|打赏|" +
+                "下载|安装|试玩|购买|支付|下单|抢购|直播|主播|开宝箱|" +
+                "跳过广告|关闭广告|屏蔽广告|广告设置|广告管理"
+        )
         val wanted = Regex("广告|广告任务|任务中心|去赚钱|赚钱|现金收益|金币收益|红包")
         lineRegex.findAll(screenDump).forEach { match ->
             val label = match.groupValues[1].substringBefore("{").trim()
