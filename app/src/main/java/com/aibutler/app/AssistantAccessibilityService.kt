@@ -1341,10 +1341,10 @@ class AssistantAccessibilityService : AccessibilityService() {
             if (targetLabel.isNotBlank()) {
                 val text = "$actionName：$targetLabel"
                 val textWidth = textPaint.measureText(text)
-                val left = (targetX - textWidth / 2f - density * 9f)
-                    .coerceIn(density * 8f, width.toFloat() - textWidth - density * 26f)
-                val top = (targetY - base - density * 36f)
-                    .coerceIn(density * 12f, height.toFloat() - density * 46f)
+                val maxLeft = (width.toFloat() - textWidth - density * 26f).coerceAtLeast(density * 8f)
+                val left = (targetX - textWidth / 2f - density * 9f).coerceIn(density * 8f, maxLeft)
+                val maxTop = (height.toFloat() - density * 46f).coerceAtLeast(density * 12f)
+                val top = (targetY - base - density * 36f).coerceIn(density * 12f, maxTop)
                 val right = left + textWidth + density * 18
                 val bottom = top + density * 27
                 paint.color = Color.parseColor("#CC111827")
