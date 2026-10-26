@@ -872,6 +872,53 @@ class AgentLogicTest {
         assertNull(PageGuard.rewardContinueLabel(dump, null))
     }
 
+    @Test
+    fun 奖励完成层_完成提示旁的无名关闭控件可识别() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 已成功领取奖励 广告 点击并浏览15秒 额外得330金币\n" +
+            "可点击: 已成功领取奖励 {,TextView} [190,66]\n" +
+            "可点击: × {,ImageView} [327,66]\n" +
+            "可点击: 点击并浏览15秒 额外得330金币 {,Button} [499,840]"
+
+        val result = PageGuard.rewardCompletionExit(dump)
+        assertNotNull(result)
+        assertEquals("×", result!!.closeLabel)
+    }
+
+    @Test
+    fun 奖励完成层_合并结果和关闭图标可识别() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "可点击: 已成功领取奖励 × {result_close,ViewGroup} [250,66]\n" +
+            "可点击: 点击并浏览15秒 额外得330金币 {cta,Button} [499,840]"
+
+        assertEquals("×", PageGuard.rewardCompletionExit(dump)?.closeLabel)
+    }
+
+    @Test
+    fun 奖励完成层_底部广告转化按钮不能当退出() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 已成功领取奖励 广告\n" +
+            "可点击: 点击并浏览15秒 额外得330金币 {,Button} [499,840]"
+
+        assertTrue(PageGuard.hasRewardCompletion(dump))
+        assertNull(PageGuard.rewardCompletionExit(dump)?.closeLabel)
+    }
+
+    @Test
+    fun 奖励完成层_普通页面和活跃倒计时不触发() {
+        val taskCenter = "当前应用: com.any.reward.app\n" +
+            "页面内容: 任务中心 看广告赚金币 立即领取\n" +
+            "可点击: 立即领取 {,Button} [499,320]"
+        val countdown = "当前应用: com.any.reward.app\n" +
+            "页面内容: 已成功领取奖励 15秒后可领下一轮\n" +
+            "可点击: × {,ImageView} [327,66]"
+
+        assertFalse(PageGuard.hasRewardCompletion(taskCenter))
+        assertNull(PageGuard.rewardCompletionExit(taskCenter))
+        // 活跃倒计时由调用方守卫阻止退出，这里只保证识别器不凭空制造证据。
+        assertTrue(PageGuard.hasRewardCompletion(countdown))
+    }
+
     // ========== PopupGuard：通用阻塞性弹窗硬关闭层 ==========
 
     @Test

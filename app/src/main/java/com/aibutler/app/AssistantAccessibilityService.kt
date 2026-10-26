@@ -1207,6 +1207,77 @@ class AssistantAccessibilityService : AccessibilityService() {
         else "点击动作发送失败"
     }
 
+    /**
+     * Reward SDKs often expose the result text but leave the tiny X unnamed or non-clickable.
+     * Locate the result first, then use semantics plus same-row structure to find its close
+     * control. This works for any app and never trusts the bottom ad CTA as an exit.
+     */
+    fun clickRewardCompletionExit(): String {
+        val nodes = collectWindowNodes()
+        val anchors = nodes.filter { PageGuard.hasRewardCompletion(ownNodeLabel(it)) }
+        if (anchors.isEmpty()) return "屏幕上没有奖励完成提示，不能代点关闭控件"
+
+        val screen = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+        data class Candidate(val node: AccessibilityNodeInfo, val rect: Rect, val score: Int)
+
+        fun closeButtonScore(node: AccessibilityNodeInfo, rewardRect: Rect): Int? {
+            val label = ownNodeLabel(node)
+            val id = node.viewIdResourceName?.substringAfterLast('/').orEmpty().lowercase()
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            if (rect.isEmpty || !screen.contains(rect)) return null
+            val mergedResultClose = PageGuard.rewardLabelHasCloseControl(label)
+            if (rewardRect.width() > 0 && rect == rewardRect && !mergedResultClose) return null
+            val semantic = when {
+                mergedResultClose -> 900
+                label.matches(Regex("\\s*[×✕✖⨯Xx]\\s*")) -> 620
+                Regex("关闭|跳过|放弃奖励|放弃观看|放弃本次奖励|不再观看|坚持退出|残忍离开|残忍拒绝|退出广告")
+                    .containsMatchIn(label) -> 520
+                Regex("(close|dismiss|skip|cancel|abandon)").containsMatchIn(id) -> 460
+                else -> 0
+            }
+            if (semantic <= 0) {
+                if (label.isNotBlank() &&
+                    Regex("点击并浏览|继续观看|立即下载|去下载|安装|试玩|抢购|了解详情|了解更多|去完成")
+                        .containsMatchIn(label)
+                ) return null
+
+                val centerYDelta = abs(rect.exactCenterY() - rewardRect.exactCenterY())
+                val sameRow = centerYDelta <= maxOf(32, (rewardRect.height() * 0.8).toInt())
+                val rightSide = rect.left >= rewardRect.left && rect.left >= rewardRect.right - 12
+                val small = rect.width() <= maxOf(180, (screen.width() * 0.22).toInt()) &&
+                    rect.height() <= maxOf(120, (screen.height() * 0.08).toInt())
+                if (!sameRow || !rightSide || !small) return null
+                return 300
+            }
+            if (semantic >= 460) return semantic
+
+            val centerYDelta = abs(rect.exactCenterY() - rewardRect.exactCenterY())
+            val sameRow = centerYDelta <= maxOf(70, (rewardRect.height() * 1.4).toInt())
+            return if (sameRow) semantic else null
+        }
+
+        for (anchor in anchors) {
+            val rewardRect = Rect()
+            anchor.getBoundsInScreen(rewardRect)
+            val candidates = ArrayList<Candidate>()
+            for (node in nodes) {
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                val score = closeButtonScore(node, rewardRect) ?: continue
+                if (score >= 460 || sharesFamily(node, anchor, maxHops = 4)) {
+                    candidates.add(Candidate(node, rect, score))
+                }
+            }
+            val target = candidates.maxWithOrNull(
+                compareBy({ it.score }, { -abs(it.rect.exactCenterX() - rewardRect.exactCenterX()) })
+            ) ?: continue
+            val clicked = clickNodeOrParent(target.node, "奖励完成关闭控件")
+            if (clicked.startsWith("已")) return clicked
+        }
+        return "找到奖励完成提示，但没有可安全点击的关闭控件"
+    }
+
     private fun collectNodes(match: (AccessibilityNodeInfo) -> Boolean): List<AccessibilityNodeInfo> {
         val root = rootInActiveWindow ?: return emptyList()
         val out = ArrayList<AccessibilityNodeInfo>()
@@ -1220,6 +1291,79 @@ class AssistantAccessibilityService : AccessibilityService() {
             } catch (e: Exception) { }
         }
         return out
+    }
+
+    private fun collectWindowNodes(limit: Int = 350): List<AccessibilityNodeInfo> {
+        val activeRoot = rootInActiveWindow ?: return emptyList()
+        val roots = LinkedHashSet<AccessibilityNodeInfo>()
+        roots.add(activeRoot)
+        try {
+            windows?.forEach { window ->
+                window.root?.let {
+                    if (it.packageName == activeRoot.packageName) roots.add(it)
+                }
+            }
+        } catch (_: Exception) { }
+
+        val out = ArrayList<AccessibilityNodeInfo>()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        roots.forEach(queue::add)
+        while (queue.isNotEmpty() && out.size < limit) {
+            val node = queue.removeFirst()
+            out.add(node)
+            try {
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let(queue::add)
+                }
+            } catch (_: Exception) { }
+        }
+        return out
+    }
+
+    private fun ownNodeLabel(node: AccessibilityNodeInfo): String =
+        sequenceOf(
+            node.text?.toString()?.trim().orEmpty(),
+            node.contentDescription?.toString()?.trim().orEmpty()
+        ).filter { it.isNotBlank() }.joinToString(" ")
+
+    private fun sharesFamily(first: AccessibilityNodeInfo, second: AccessibilityNodeInfo, maxHops: Int): Boolean {
+        val ancestors = HashSet<AccessibilityNodeInfo>()
+        var node: AccessibilityNodeInfo? = first
+        var hops = 0
+        while (node != null && hops <= maxHops) {
+            ancestors.add(node)
+            node = try { node.parent } catch (_: Exception) { null }
+            hops++
+        }
+        node = second
+        hops = 0
+        while (node != null && hops <= maxHops) {
+            if (node in ancestors) return true
+            node = try { node.parent } catch (_: Exception) { null }
+            hops++
+        }
+        return false
+    }
+
+    private fun clickNodeOrParent(node: AccessibilityNodeInfo, query: String): String {
+        var current: AccessibilityNodeInfo? = node
+        var hops = 0
+        while (current != null && hops < 6) {
+            val rect = Rect()
+            current.getBoundsInScreen(rect)
+            if (current.isClickable && !rect.isEmpty) {
+                showActionPreview(rect.exactCenterX(), rect.exactCenterY(), query)
+                if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    return if (current == node) "已点击「$query」" else "已点击「$query」（点的是它的容器）"
+                }
+            }
+            current = try { current.parent } catch (_: Exception) { null }
+            hops++
+        }
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        if (rect.isEmpty) return "「$query」位置异常，已跳过点击"
+        return if (tap(rect.exactCenterX(), rect.exactCenterY())) "已用坐标点击「$query」" else "点击动作发送失败"
     }
 
     private fun nodeLabel(n: AccessibilityNodeInfo): String =

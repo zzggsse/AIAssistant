@@ -1,5 +1,7 @@
 package com.aibutler.app
 
+import kotlin.math.abs
+
 /**
  * Task-scoped guards for pages that a reward task should leave immediately.
  *
@@ -9,6 +11,23 @@ package com.aibutler.app
  */
 object PageGuard {
     private const val TAG = "PageGuard"
+
+    data class RewardCompletionExit(
+        val evidence: String,
+        val closeLabel: String?
+    )
+
+    private val rewardCompletionEvidence = Regex(
+        "已成功领取|领取成功|已领取奖励|奖励已发放|已到账|额外奖励已到手|签到成功|今日已签到"
+    )
+
+    private val rewardCloseGlyph = Regex("[×✕✖⨯]|(?:^|[^A-Za-z])X(?:$|[^A-Za-z])")
+    private val rewardCloseText = Regex(
+        "关闭|跳过|以后再说|暂不|下次再说|放弃奖励|放弃观看|放弃本次奖励|不再观看|不感兴趣|坚持退出|残忍离开|残忍拒绝|退出广告"
+    )
+    private val rewardAdTransform = Regex(
+        "点击并浏览|浏览\\s*\\d+|继续观看|额外得|立即下载|去下载|安装|试玩|抢购|了解详情|查看详情|了解更多|去完成|去体验"
+    )
 
     fun isRewardTask(task: String): Boolean {
         val text = normalize(task)
@@ -285,6 +304,66 @@ object PageGuard {
     fun safeAdExitLabel(screenDump: String): String? =
         ExitMemory.visibleButtons(screenDump).firstOrNull()?.label
 
+    /** A reward result is progress, not the end of a looped task; identify the layer to leave. */
+    fun hasRewardCompletion(screenDump: String): Boolean =
+        rewardCompletionEvidence.containsMatchIn(normalize(screenDump))
+
+    /** Accessibility may merge the result phrase and X into one node's own label. */
+    fun rewardLabelHasCloseControl(label: String): Boolean {
+        val text = normalize(label)
+        return hasRewardCompletion(text) &&
+            (rewardCloseGlyph.containsMatchIn(text) || rewardCloseText.containsMatchIn(text))
+    }
+
+    /**
+     * Find a close control that shares the reward-result context. The X is frequently a tiny
+     * image or a generic container, so matching the completion phrase is required before using
+     * row geometry. This deliberately does not return the ad CTA just because it also mentions
+     * another reward.
+     */
+    fun rewardCompletionExit(screenDump: String): RewardCompletionExit? {
+        if (!hasRewardCompletion(screenDump)) return null
+        val evidence = rewardCompletionEvidence.find(normalize(screenDump))?.value.orEmpty()
+        val rows = clickableRows(screenDump)
+        val anchors = rows.filter { (label, _, _) ->
+            rewardCompletionEvidence.containsMatchIn(normalize(label))
+        }
+        val closeGlyphRows = rows.filter { (label, _, _) ->
+            val text = normalize(label)
+            rewardCloseGlyph.containsMatchIn(text) && !rewardAdTransform.containsMatchIn(text)
+        }
+
+        // Same row first: the glyph belongs to the result toast/banner, not to an unrelated corner.
+        for (anchor in anchors) {
+            closeGlyphRows
+                .filter { (_, x, y) -> isSameRewardRow(anchor.second, anchor.third, x, y) }
+                .minByOrNull { (_, x, y) -> abs(x - anchor.second) + abs(y - anchor.third) }
+                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+        }
+
+        // Some SDKs merge the result and X into one accessibility label.
+        anchors.firstOrNull { (label, _, _) -> rewardCloseGlyph.containsMatchIn(label) }
+            ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+
+        // Text-labeled close/dismiss controls near the result remain the generic fallback.
+        val closeRows = rows.filter { (label, _, _) ->
+            val text = normalize(label)
+            rewardCloseText.containsMatchIn(text) && !rewardAdTransform.containsMatchIn(text)
+        }
+        for (anchor in anchors) {
+            closeRows
+                .filter { (_, x, y) -> isNearRewardResult(anchor.second, anchor.third, x, y) }
+                .minByOrNull { (_, x, y) -> abs(x - anchor.second) + abs(y - anchor.third) }
+                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+        }
+        if (anchors.isEmpty()) {
+            closeGlyphRows.firstOrNull()?.let { row ->
+                return RewardCompletionExit(evidence, queryFor(row.first))
+            }
+        }
+        return RewardCompletionExit(evidence, null)
+    }
+
     /** 拍摄/创作页的「不保存」退出按钮，按优先级排列 */
     val CREATION_DISCARD_LABELS = listOf("不保存返回", "不保存", "丢弃")
 
@@ -328,6 +407,35 @@ object PageGuard {
             .map { it.groupValues[1].substringBefore("{").trim() }
             .filter { it.isNotBlank() }
             .toList()
+
+    private fun clickableRows(screenDump: String): List<Triple<String, Int, Int>> {
+        val lineRegex = Regex("(?:^|\\n)可点击:\\s*(.+?)\\s*\\[(-?\\d+),(-?\\d+)]")
+        return lineRegex.findAll(screenDump).mapNotNull { match ->
+            val label = match.groupValues[1].substringBefore("{").trim()
+            val x = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+            val y = match.groupValues[3].toIntOrNull() ?: return@mapNotNull null
+            if (label.isBlank() || x !in 0..999 || y !in 0..999) null else Triple(label, x, y)
+        }.toList()
+    }
+
+    private fun isSameRewardRow(anchorX: Int, anchorY: Int, closeX: Int, closeY: Int): Boolean =
+        abs(anchorY - closeY) <= 35 &&
+            closeX != anchorX &&
+            abs(closeX - anchorX) <= 350
+
+    private fun isNearRewardResult(anchorX: Int, anchorY: Int, closeX: Int, closeY: Int): Boolean =
+        abs(anchorY - closeY) <= 70 && abs(anchorX - closeX) <= 500
+
+    private fun queryFor(label: String): String {
+        val clean = label.substringBefore("{").trim()
+        val glyph = rewardCloseGlyph.find(clean)?.value?.trim().orEmpty()
+        return when {
+            glyph.isNotBlank() -> glyph
+            rewardCloseText.containsMatchIn(clean) ->
+                rewardCloseText.find(clean)!!.value
+            else -> clean.take(48)
+        }
+    }
 
     private fun normalize(value: String): String = value.replace(Regex("\\s+"), "")
 }

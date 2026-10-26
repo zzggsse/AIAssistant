@@ -1526,6 +1526,7 @@ class MainActivity : AppCompatActivity() {
             var blockedRewardFinishRounds = 0
             var downloadWallExitRounds = 0
             var rewardActivityExitRounds = 0
+            var rewardLayerExitRounds = 0
             var rewardCenterExitRounds = 0
             var adTaskFeedRounds = 0
             var retryNote = ""
@@ -1997,6 +1998,68 @@ class MainActivity : AppCompatActivity() {
                         )
                     })
                 }
+                // 🎁 奖励完成层不是任务终点：先拿到“完成证据”，立即退出广告/结算层，再回任务页继续循环。
+                // 这里不信任模型对底部 CTA 的理解；系统只点击完成提示同一语境里的关闭控件，找不到才 Back。
+                val rewardCompletion = if (!passiveVideoTask && rewardCountdownSeconds == null) {
+                    PageGuard.rewardCompletionExit(screenDump)
+                } else null
+                val rewardAdLayer = rewardCompletion != null && Regex(
+                    "广告|额外得|点击并浏览|继续观看|激励|看完.*领|浏览.*秒"
+                ).containsMatchIn(compactGuardDump)
+                if (PageGuard.isRewardTask(userText) &&
+                    (rewardCompletion?.closeLabel != null || rewardAdLayer)
+                ) {
+                    val structuralExit = AssistantAccessibilityService.instance?.clickRewardCompletionExit()
+                    val usedStructuralExit = structuralExit?.startsWith("已") == true
+                    val explicitExit = if (!usedStructuralExit) {
+                        rewardCompletion?.closeLabel?.let {
+                            AssistantAccessibilityService.instance?.clickText(it)
+                        }
+                    } else null
+                    val usedExplicitExit = explicitExit?.startsWith("已") == true
+                    if (!usedStructuralExit && !usedExplicitExit) {
+                        AssistantAccessibilityService.instance?.pressBack()
+                    }
+                    rewardLayerExitRounds++
+                    android.util.Log.i(
+                        "AIButler",
+                        "AGLM reward-layer exit #$rewardLayerExitRounds: evidence=${rewardCompletion?.evidence}, " +
+                            "label=${rewardCompletion?.closeLabel}, structural=$usedStructuralExit, explicit=$usedExplicitExit"
+                    )
+                    runOnUiThread {
+                        adapter.add(
+                            ChatAdapter.Msg(
+                                "system",
+                                when {
+                                    usedStructuralExit -> "✅ 奖励已到手，已点击完成提示旁的退出控件。"
+                                    usedExplicitExit -> "✅ 奖励已到手，已点击「${rewardCompletion?.closeLabel}」退出结算层。"
+                                    else -> "✅ 奖励已到手，已按返回退出当前广告层。"
+                                }
+                            )
+                        )
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    if (rewardLayerExitRounds >= 4) {
+                        finalReply = "奖励已领取，但连续退出结算层后仍无法回到任务页。为避免误点广告已停止；请手动返回后说「继续」。"
+                        android.util.Log.i("AIButler", "AGLM reward-layer exit breaker fired")
+                        break
+                    }
+                    ctx.add(
+                        JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "✅ 系统提示：屏幕出现「${rewardCompletion?.evidence}」，本轮奖励证据已经成立。" +
+                                    "系统已退出当前广告/结算层，这不是任务终点。下一轮必须回到任务中心或赚钱页，" +
+                                    "重新读取同一个广告任务入口并开始下一轮；绝不要点击「点击并浏览/额外得金币」这类广告 CTA，也不要输出 finish。"
+                            )
+                        }
+                    )
+                    Thread.sleep(1200)
+                    continue
+                } else if (!PageGuard.hasRewardCompletion(screenDump)) {
+                    rewardLayerExitRounds = 0
+                }
                 // 📵 下载墙页：这类广告页会自动触发APK下载/安装（用户投诉「老安装软件」的元凶），绝不停留。
                 // 但活跃激励广告例外：奖励倒计时存在时提前 Back 会作废已看时长；应等待或点「继续观看」。
                 if (PageGuard.isDownloadWall(compactGuardDump) && rewardCountdownSeconds == null) {
@@ -2213,7 +2276,10 @@ class MainActivity : AppCompatActivity() {
                         lastCardLabel = ""
                     }
                 }
-                val doneNote = if (rewardDone && Regex("金币|签到|赚钱").containsMatchIn(userText)) {
+                val doneNote = if (rewardDone && TaskCompletionVerifier.isExplicitAdRewardTask(userText)) {
+                    "\n✅ 系统读屏：广告任务的完成证据已出现。完成一轮不等于任务结束，也不允许输出 finish；" +
+                        "必须退出当前广告/结算层并回到任务中心，再看是否还有下一轮。"
+                } else if (rewardDone && Regex("金币|签到|赚钱").containsMatchIn(userText)) {
                     "\n✅ 系统读屏：页面显示今日签到/领取已完成。不要再找签到入口，也不要反复尝试广告类外跳任务卡；只有页面上存在明确的非广告领取按钮（立即领取/开宝箱等）时才点它，否则直接 finish 并汇报今日已完成内容。"
                 } else ""
                 val cardNote = if (Regex("金币|任务中心|去赚钱|奖励").containsMatchIn(screenDump))
