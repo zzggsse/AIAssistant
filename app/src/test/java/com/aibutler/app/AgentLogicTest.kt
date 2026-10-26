@@ -704,6 +704,13 @@ class AgentLogicTest {
         assertTrue(PageGuard.isOffMissionTap(adTask, "去观看", "幸运抽奖 转盘赢大奖"))
         assertTrue(PageGuard.isOffMissionTap(adTask, "去观看", "下载APP领现金"))
         assertFalse(PageGuard.isOffMissionTap(adTask, "去观看", "看广告得金币 立即观看"))
+        assertFalse(
+            PageGuard.isOffMissionTap(
+                adTask,
+                "去赚钱 / 去赚钱 {,ActionBar}",
+                "暂停视频 / 音乐转盘 / 去赚钱 / 拍摄"
+            )
+        )
         assertTrue(PageGuard.isOffMissionTap("不要下载只看广告", "立即下载"))
         assertTrue(PageGuard.isOffMissionTap("不要下载只看广告", "去观看", "下载APP领现金"))
         assertFalse(PageGuard.isOffMissionTap("不要下载只看广告", "看广告得金币"))

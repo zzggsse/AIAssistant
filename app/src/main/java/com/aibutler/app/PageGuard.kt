@@ -163,6 +163,9 @@ object PageGuard {
     fun isOffMissionTap(task: String, label: String, context: String = ""): Boolean {
         val taskVerbs = verbsIn(taskTextForMission(task))
         if (taskVerbs.isEmpty()) return false
+        if (isRewardTask(task) && Regex("任务中心|赚钱任务|去赚钱|去赚金币|赚钱|赚金币")
+            .containsMatchIn(normalize(label))
+        ) return false
         val labelVerbs = verbsIn(label)
         if (labelVerbs.isNotEmpty() && labelVerbs.intersect(taskVerbs).isEmpty()) return true
 
