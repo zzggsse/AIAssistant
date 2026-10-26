@@ -2560,6 +2560,25 @@ class MainActivity : AppCompatActivity() {
                         })
                         continue
                     }
+                    val isLoopingAdTask = Regex("看广告|刷广告|赚金币|赚积分|看激励|浏览广告|做任务|去赚钱").containsMatchIn(userText)
+                    if (isLoopingAdTask) {
+                        val hasTerminationSignal = Regex("今日已达上限|明日再来|次数已用完|次数用完|已达上限|没有更多|再看看别的").containsMatchIn(screenDump)
+                        if (!hasTerminationSignal) {
+                            android.util.Log.i("AIButler", "AGLM finish rejected: looping ad task without termination signal")
+                            ctx.add(JsonObject().apply {
+                                addProperty("role", "user")
+                                addProperty(
+                                    "content",
+                                    "🛑 系统提示：这是一个循环型广告任务（看广告赚金币/做任务）。完成一轮广告绝不算任务完成。" +
+                                        "当前页面没有出现终止信号（今日已达上限/明日再来/次数用完），你必须继续：" +
+                                        "① 如果还在广告/结算页，先关闭或领取奖励；② 回到任务中心页面；③ 再次点击同一个任务入口开始下一轮。" +
+                                        "只有看到明确的终止提示才允许 finish。不要 finish，立即输出下一步动作。"
+                                )
+                            })
+                            finishVerifyCount = 0
+                            continue
+                        }
+                    }
                     val quoted = answer.indexOf('"')
                     finalReply = if (quoted >= 0) {
                         answer.substring(quoted + 1)
