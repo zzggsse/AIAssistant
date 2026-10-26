@@ -1397,7 +1397,13 @@ object AgentEngine {
                         if (scaled !== bmp) scaled.recycle()
                         // 压缩进 b64 后原图不再需要；此前只有 safeHits 分支回收了 bmp，视觉分支每轮泄漏一张整屏大图
                         bmp.recycle()
-                        val prompt = "这是手机屏幕截图，原始分辨率 ${sw}x${sh} 像素，截图已等比缩小到 ${outW}x${outH}。\n用户要完成的目标：${s("goal")}\n请输出：\n第1行：当前页面是什么。\n第2行起：列出屏幕上所有可见的、可能可以点击的元素（包括无文字的图标/按钮），每个一行，格式：说明 | 点击 x,y（坐标用原始分辨率 ${sw}x${sh} 像素）。\n最后一行：建议动作，格式为：点击 x,y 或 滑动 up/down/left/right 或 输入 具体内容 或 已完成 或 无法完成(原因)。\n注意：所有坐标必须换算成原始分辨率 ${sw}x${sh} 的像素坐标，不要给截图上的缩小坐标。看不清的文字要说明不确定。"
+                        val a11yDump = svc?.dumpScreen().orEmpty()
+                        val a11ySection = if (a11yDump.isNotBlank())
+                            "\n【无障碍树结构化元素清单（与截图同步采集，坐标为0-999归一化值）】\n$a11yDump\n" +
+                            "注意：上面的清单是无障碍服务直接读到的控件属性，比截图更可靠。" +
+                            "如果清单中已经包含你要找的元素，优先用清单里的坐标而不是靠截图目测。\n"
+                        else ""
+                        val prompt = "这是手机屏幕截图，原始分辨率 ${sw}x${sh} 像素，截图已等比缩小到 ${outW}x${outH}。\n用户要完成的目标：${s("goal")}\n${a11ySection}请输出：\n第1行：当前页面是什么。\n第2行起：列出屏幕上所有可见的、可能可以点击的元素（包括无文字的图标/按钮），每个一行，格式：说明 | 点击 x,y（坐标用原始分辨率 ${sw}x${sh} 像素）。\n最后一行：建议动作，格式为：点击 x,y 或 滑动 up/down/left/right 或 输入 具体内容 或 已完成 或 无法完成(原因)。\n注意：所有坐标必须换算成原始分辨率 ${sw}x${sh} 的像素坐标，不要给截图上的缩小坐标。看不清的文字要说明不确定。"
                         try {
                             "👁 视觉分析结果：\n" + LlmClient.chatVision(
                                 Prefs.baseUrl(a), Prefs.apiKey(a), Prefs.model(a), prompt, b64
