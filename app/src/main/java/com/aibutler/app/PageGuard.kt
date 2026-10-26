@@ -118,9 +118,10 @@ object PageGuard {
     fun isSpendActionTap(task: String, label: String, context: String = ""): Boolean {
         val target = normalize(label)
         val nearby = normalize(context)
-        if (!spendActionEntry.containsMatchIn(target) && !spendActionEntry.containsMatchIn(nearby)) {
-            return false
-        }
+        if (spendActionEntry.containsMatchIn(target)) return !taskWantsSpendAction(task)
+        if (target == "无文字元素") return false
+        if (spendGuardExemptTarget.containsMatchIn(target)) return false
+        if (!isNeutralSpendTarget(target) || !spendActionEntry.containsMatchIn(nearby)) return false
         return !taskWantsSpendAction(task)
     }
 
@@ -128,6 +129,19 @@ object PageGuard {
         "发红包|红包封面|红包雨|送礼物|赠送礼物|刷礼物|礼物面板|打赏|" +
             "充值|快币|余额|付款|支付|下单|购买|抢购|加入购物车|提交订单|确认订单|" +
             "旗舰店|专卖店|工厂店|官方旗舰|店铺|商品详情|讲解中"
+    )
+
+    private val spendGuardExemptTarget = Regex(
+        "观看广告|看广告|看视频|继续观看|继续看|任务中心|去赚钱|赚钱|金币收益|现金收益|" +
+            "签到|已成功领取|领取成功|已到账|关闭|跳过|返回|退出|以后再说"
+    )
+
+    private fun isNeutralSpendTarget(target: String): Boolean =
+        target.isBlank() || target == "无文字元素" || neutralSpendTarget.containsMatchIn(target)
+
+    private val neutralSpendTarget = Regex(
+        "查看详情|去参与|立即参与|去完成|了解更多|立即查看|点击查看|查看更多|去逛逛|" +
+            "领取奖励|开心收下|知道了|我知道了|action_bar_view"
     )
 
     private fun taskWantsSpendAction(task: String): Boolean =

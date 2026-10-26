@@ -681,6 +681,8 @@ class AgentLogicTest {
         assertTrue(PageGuard.isSpendActionTap(adTask, "去参与", "送礼打赏"))
         assertFalse(PageGuard.isSpendActionTap(adTask, "观看广告领金币"))
         assertFalse(PageGuard.isSpendActionTap(adTask, "领红包"))
+        assertFalse(PageGuard.isSpendActionTap(adTask, "已成功领取奖励", "旗舰店 购买后确认收货"))
+        assertFalse(PageGuard.isSpendActionTap(adTask, "无文字元素", "旗舰店 购买后确认收货"))
     }
 
     @Test
@@ -689,6 +691,14 @@ class AgentLogicTest {
         assertFalse(PageGuard.isSpendActionTap("给主播送礼物", "礼物面板"))
         assertFalse(PageGuard.isSpendActionTap("去旗舰店看看商品", "美妆旗舰店"))
         assertTrue(PageGuard.isSpendActionTap("不要发红包，只看广告", "发红包"))
+    }
+
+    @Test
+    fun 页面防护_中性入口只在紧邻消费语境时拦截() {
+        val adTask = "看广告赚金币"
+        assertTrue(PageGuard.isSpendActionTap(adTask, "查看详情", "直播间发红包"))
+        assertFalse(PageGuard.isSpendActionTap(adTask, "观看广告得金币", "购买后确认收货得金币"))
+        assertFalse(PageGuard.isSpendActionTap(adTask, "已成功领取奖励", "店铺讲解中"))
     }
 
     @Test
