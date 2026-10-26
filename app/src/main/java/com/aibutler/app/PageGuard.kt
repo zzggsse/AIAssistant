@@ -48,9 +48,9 @@ object PageGuard {
 
     fun isLiveRoom(screenDump: String): Boolean {
         val text = normalize(screenDump)
-        val strong = Regex("直播间|直播中|正在直播|直播回放|连麦").findAll(text).any()
+        val strong = Regex("直播间|直播中|正在直播|直播回放|连麦|更多直播|直播广场").findAll(text).any()
         val interactive = Regex(
-            "退出直播间|离开直播间|退出直播|关闭直播|更多直播|说点什么|送礼物|赠送礼物|加入粉丝团|点亮灯牌"
+            "退出直播间|离开直播间|退出直播|关闭直播|更多直播|说点什么|送礼物|赠送礼物|加入粉丝团|点亮灯牌|礼物面板|抽大奖"
         ).findAll(text).any()
         return explicitLiveExit(text) != null || (strong && interactive)
     }
@@ -68,7 +68,12 @@ object PageGuard {
         return labels.firstOrNull { label ->
             Regex("退出直播间|离开直播间|退出直播|关闭直播|残忍离开|放弃观看|结束观看")
                 .containsMatchIn(label)
-        }
+        } ?: clickableRows(screenDump)
+            .filter { (label, x, y) ->
+                (label == "无文字元素" || rewardCloseGlyph.containsMatchIn(label)) &&
+                    x >= 820 && y <= 160
+            }
+            .maxByOrNull { it.second }?.first
     }
 
     fun isPaymentOrOrderPage(screenDump: String): Boolean {
@@ -121,7 +126,8 @@ object PageGuard {
 
     private val spendActionEntry = Regex(
         "发红包|红包封面|红包雨|送礼物|赠送礼物|刷礼物|礼物面板|打赏|" +
-            "充值|快币|余额|付款|支付|下单|购买|抢购|加入购物车|提交订单|确认订单"
+            "充值|快币|余额|付款|支付|下单|购买|抢购|加入购物车|提交订单|确认订单|" +
+            "旗舰店|专卖店|工厂店|官方旗舰|店铺|商品详情|讲解中"
     )
 
     private fun taskWantsSpendAction(task: String): Boolean =
@@ -132,7 +138,8 @@ object PageGuard {
 
     private val spendActionIntent = Regex(
         "发红包|发(?:一?个|个)?.{0,8}红包|送(?:一?个|个)?.{0,8}礼物|赠送礼物|刷礼物|打赏|" +
-            "充值|快币|付款|支付|下单|购买|抢购|购物|加入购物车|提交订单|确认订单"
+            "充值|快币|付款|支付|下单|购买|抢购|购物|加入购物车|提交订单|确认订单|" +
+            "旗舰店|专卖店|工厂店|官方旗舰|店铺|商品详情"
     )
 
     /** Reward pages often contain a “live-room bonus” ad card; that is not a safe reward entry. */
@@ -299,6 +306,7 @@ object PageGuard {
         val unsafe = Regex(
             "发红包|红包封面|红包雨|送礼物|赠送礼物|刷礼物|礼物面板|打赏|" +
                 "下载|安装|试玩|购买|支付|下单|抢购|直播|主播|开宝箱|" +
+                "旗舰店|专卖店|工厂店|官方旗舰|店铺|商品详情|讲解中|" +
                 "跳过广告|关闭广告|屏蔽广告|广告设置|广告管理"
         )
         val wanted = Regex("广告|广告任务|任务中心|去赚钱|赚钱|现金收益|金币收益|红包")

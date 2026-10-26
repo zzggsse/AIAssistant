@@ -687,7 +687,24 @@ class AgentLogicTest {
     fun 页面防护_任务点名消费动作时放行() {
         assertFalse(PageGuard.isSpendActionTap("帮我发红包", "发红包"))
         assertFalse(PageGuard.isSpendActionTap("给主播送礼物", "礼物面板"))
+        assertFalse(PageGuard.isSpendActionTap("去旗舰店看看商品", "美妆旗舰店"))
         assertTrue(PageGuard.isSpendActionTap("不要发红包，只看广告", "发红包"))
+    }
+
+    @Test
+    fun 页面防护_广告任务不点店铺入口且识别无文字直播关闭() {
+        val adTask = "看广告赚金币"
+        assertTrue(PageGuard.isSpendActionTap(adTask, "Judydoll橘朵美妆旗舰店"))
+
+        val liveDump = "当前应用: com.any.app\n" +
+            "页面内容: 关注 2917观看 更多直播 说点什么\n" +
+            "可点击: 无文字元素 [936,75]\n" +
+            "可点击: 说点什么... [240,850]\n" +
+            "可点击: 底部栏礼物面板按钮 [699,912]"
+
+        assertTrue(PageGuard.isLiveRoom(liveDump))
+        assertTrue(PageGuard.isUnintendedLiveRoom(adTask, liveDump))
+        assertEquals("无文字元素", PageGuard.liveRoomExitLabel(liveDump))
     }
 
     @Test
