@@ -17,6 +17,7 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         var text: String,
         var collapsed: Boolean = false,
         val imagePath: String? = null,
+        var thinkText: String? = null,
         var likeCount: Int = 0,
         var liked: Boolean = false,
         /** vision 专用：所属任务是否正在执行（true=进行中）。任务结束或重新载入会话时置 false */
@@ -40,6 +41,33 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         // 界面被系统销毁重建后聊天内容仍在（干活线程与新界面共享同一份列表）
         val sharedItems = ArrayList<Msg>()
         private const val SAVE_DELAY_MS = 220L
+
+        /**
+         * 旧版本把截图和思考存成两张卡片。加载会话时把它们重新归组，用户不用再逐张收起。
+         */
+        @JvmStatic
+        private fun groupLegacyVisionThinking(source: List<Msg>): ArrayList<Msg> {
+            val result = ArrayList<Msg>(source.size)
+            var index = 0
+            while (index < source.size) {
+                val item = source[index]
+                result.add(item)
+                index++
+                if (item.role != "vision") continue
+                val thoughts = mutableListOf<String>()
+                while (index < source.size && source[index].role == "think") {
+                    source[index].text.takeIf { it.isNotBlank() }?.let { thoughts.add(it) }
+                    index++
+                }
+                if (thoughts.isNotEmpty()) {
+                    item.thinkText = listOfNotNull(
+                        item.thinkText?.takeIf { it.isNotBlank() },
+                        thoughts.joinToString("\n\n")
+                    ).joinToString("\n\n")
+                }
+            }
+            return result
+        }
     }
 
     var onItemsChanged: (() -> Unit)? = null
@@ -71,11 +99,23 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
     /**
      * 追加一条默认收起的"思考过程"。
      * 同时写入本机聊天历史，手机端重开 App 后仍能看到；只用于展示，不会回传给模型接口。
+     * 视觉任务里思考紧跟最新截图：这时并入同一张截图卡片，展开/收起只用一次点击。
      */
     fun addThink(text: String) {
         val body = text.trim()
         if (body.isEmpty()) return
         val shown = if (body.length > MAX_THINK_CHARS) body.take(MAX_THINK_CHARS) + "\n…（已截断）" else body
+        val latestVision = items.lastOrNull()?.takeIf { it.role == "vision" }
+        if (latestVision != null) {
+            latestVision.thinkText = listOfNotNull(
+                latestVision.thinkText?.takeIf { it.isNotBlank() },
+                shown
+            ).joinToString("\n\n")
+            scheduleSave()
+            notifyDataSetChanged()
+            onItemsChanged?.invoke()
+            return
+        }
         val msg = Msg("think", shown, collapsed = true)
         items.add(msg)
         scheduleSave()
@@ -163,8 +203,9 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
     }
 
     private fun replaceItems(newItems: List<Msg>) {
+        val normalizedItems = groupLegacyVisionThinking(newItems)
         items.clear()
-        items.addAll(newItems)
+        items.addAll(normalizedItems)
         // 重新载入的会话里截图一律折叠收起：running 是"任务正在跑"的瞬时状态，落盘恢复后不可能还在跑
         // （App 半路被杀的残留也一并纠正）；旧版本存的截图没有折叠概念，统一收起避免历史会话一打开全是图
         for (m in items) {
@@ -244,6 +285,9 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
             val expanded = !msg.collapsed
             holder.visionBody?.visibility = if (expanded) View.VISIBLE else View.GONE
             holder.tvVisionCaption?.text = msg.text
+            holder.tvVisionThink?.text = msg.thinkText.orEmpty()
+            holder.tvVisionThink?.visibility =
+                if (msg.thinkText.isNullOrBlank()) View.GONE else View.VISIBLE
             holder.ivVisionArrow?.rotation = if (msg.collapsed) -90f else 0f
             holder.ivVisionArrow?.contentDescription =
                 if (msg.collapsed) "展开截图思考过程" else "收起截图思考过程"
@@ -297,6 +341,7 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         val visionHeader: View? = root.findViewById(R.id.visionHeader)
         val visionBody: View? = root.findViewById(R.id.visionBody)
         val tvVisionCaption: TextView? = root.findViewById(R.id.tvVisionCaption)
+        val tvVisionThink: TextView? = root.findViewById(R.id.tvVisionThink)
         val ivVisionArrow: android.widget.ImageView? = root.findViewById(R.id.ivVisionArrow)
         val ivVision: android.widget.ImageView? = root.findViewById(R.id.ivVision)
         val likeBurst: LikeBurstView? = root.findViewById(R.id.likeBurst)

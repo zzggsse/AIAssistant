@@ -81,6 +81,15 @@
                 android:maxHeight="240dp"
                 android:scaleType="fitStart"
                 android:contentDescription="发给AI识别的屏幕截图" />
+
+            <TextView
+                android:id="@+id/tvVisionThink"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textSize="13sp"
+                android:textColor="@color/colorThinkText"
+                android:lineSpacingExtra="3dp" />
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>
