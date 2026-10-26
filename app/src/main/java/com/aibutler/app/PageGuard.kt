@@ -10,10 +10,13 @@ package com.aibutler.app
 object PageGuard {
     private const val TAG = "PageGuard"
 
-    fun isRewardTask(task: String): Boolean = Regex(
-        "金币|金币奖励|积分|奖励|赚钱|收益|签到|看广告|浏览广告|刷广告",
-        RegexOption.IGNORE_CASE
-    ).containsMatchIn(normalize(task))
+    fun isRewardTask(task: String): Boolean {
+        val text = normalize(task)
+        return TaskCompletionVerifier.isExplicitAdRewardTask(text) || Regex(
+            "金币|金币奖励|积分|奖励|赚钱|收益|签到|看广告|浏览广告|刷广告",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(text)
+    }
 
     fun isLiveIntentTask(task: String): Boolean {
         val text = normalize(task)
@@ -134,8 +137,8 @@ object PageGuard {
      */
     fun rewardEntryLabel(screenDump: String): String? {
         val lineRegex = Regex("(?:^|\\n)可点击:\\s*(.+?)\\s*\\[-?\\d+,-?\\d+\\]")
-        val unsafe = Regex("下载|安装|试玩|购买|支付|下单|抢购|直播|主播|开宝箱")
-        val wanted = Regex("看广告|广告任务|任务中心|去赚钱|赚钱|现金收益|金币收益|红包")
+        val unsafe = Regex("下载|安装|试玩|购买|支付|下单|抢购|直播|主播|开宝箱|跳过广告|关闭广告|屏蔽广告|广告设置|广告管理")
+        val wanted = Regex("广告|广告任务|任务中心|去赚钱|赚钱|现金收益|金币收益|红包")
         lineRegex.findAll(screenDump).forEach { match ->
             val label = match.groupValues[1].substringBefore("{").trim()
             val text = normalize(label)

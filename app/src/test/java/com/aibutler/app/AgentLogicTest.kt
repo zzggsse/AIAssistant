@@ -665,6 +665,7 @@ class AgentLogicTest {
     fun 刷视频赚金币_按普通视频流处理() {
         assertTrue(AgentEngine.isPassiveVideoTask("去抖音极速版刷视频赚金币"))
         assertTrue(AgentEngine.isPassiveVideoTask("看视频刷金币"))
+        assertTrue(AgentEngine.isPassiveVideoTask("刷会儿视频"))
         assertTrue(AgentEngine.isPassiveVideoTask("浏览一会儿短视频"))
     }
 
@@ -673,6 +674,8 @@ class AgentLogicTest {
         assertFalse(AgentEngine.isPassiveVideoTask("看广告赚金币"))
         assertFalse(AgentEngine.isPassiveVideoTask("去抖音极速版看广告赚金币"))
         assertFalse(AgentEngine.isPassiveVideoTask("去抖音极速版看广告刷金币"))
+        assertFalse(AgentEngine.isPassiveVideoTask("看广告视频赚金币"))
+        assertFalse(AgentEngine.isPassiveVideoTask("刷广告领现金"))
         assertFalse(AgentEngine.isPassiveVideoTask("去任务中心做任务赚金币"))
         assertFalse(AgentEngine.isPassiveVideoTask("先签到，再看视频"))
         assertTrue(AgentEngine.isPassiveVideoTask("不要做任务，直接刷视频"))
@@ -720,7 +723,7 @@ class AgentLogicTest {
         assertTrue(sp.contains("只适用于明确的广告/任务指令"))
         assertTrue(sp.contains("如果已经进入任务中心页，立即 Back 回视频流"))
         assertTrue(sp.contains("绝不能在普通视频流 Swipe 刷视频"))
-        assertTrue(sp.contains("用户明确说「看广告/刷广告」时不适用本条"))
+        assertTrue(sp.contains("用户明确说「看广告、看个广告、刷广告/广告视频、看激励广告」时不适用本条"))
     }
 
     @Test

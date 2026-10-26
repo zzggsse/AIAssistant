@@ -64,8 +64,24 @@ object TaskCompletionVerifier {
             "抖音|快手|淘宝|京东|拼多多|哔哩|B站)"
     )
 
+    /** 广告作为明确任务对象：覆盖"看个广告/广告视频/激励广告/浏览广告领金币"等说法 */
+    private val explicitAdTask = Regex(
+        "(?:观看|看|刷|浏览|播放|点开|点击|做)[^\\n，。;；!！?？]{0,6}?广告|" +
+            "广告(?:视频|任务)|激励广告|插屏广告|信息流广告|" +
+            "广告[^\\n，。;；!！?？]{0,8}?(?:赚|挣|领|得|拿|换|金币|积分|现金|收益|奖励|钱)"
+    )
+
+    private val negatedAdTask = Regex(
+        "(?:不要|别再?|禁止|避免|不得)[^\\n，。;；!！?？]{0,6}?" +
+            "(?:观看|看|刷|浏览|播放|点开|点击|做)[^\\n，。;；!！?？]{0,6}?广告"
+    )
+
     /** 明确的挂机赚钱/任务循环意图（对应系统提示 18/20.1 的循环型任务；"签到"是一次性动作，不算挂机） */
-    private val rewardLoopVerb = Regex("看广告|刷广告|浏览广告|做任务|去赚钱|赚金币|赚积分|挂机|开宝箱|宝箱")
+    private val rewardLoopVerb = Regex(
+        "(?:赚|挣|领|得|拿|收|换)(?:金币|金豆|积分|现金|红包|奖励|收益|钱)|" +
+            "(?:金币|积分|现金|收益|红包|奖励)(?:任务|收益|中心)|" +
+            "赚钱|挣钱|做任务|任务中心|去赚钱|挂机|开宝箱|宝箱"
+    )
 
     /** 明确数量/时长限定：有目标值就交给模型+既有证据链收敛，按 BOUNDED 处理 */
     private val quantified = Regex(
@@ -90,6 +106,7 @@ object TaskCompletionVerifier {
         val text = userText.replace(Regex("\\s+"), "")
         if (quantified.containsMatchIn(text)) return TaskClass.BOUNDED
         val neg = negation.find(text)
+        if (isExplicitAdRewardTask(text)) return TaskClass.OPEN_ENDED
         rewardLoopVerb.find(text)?.let { m ->
             if (neg == null || m.range.first < neg.range.first) return TaskClass.OPEN_ENDED
         }
@@ -97,6 +114,16 @@ object TaskCompletionVerifier {
             if (neg == null || m.range.first < neg.range.first) return TaskClass.OPEN_ENDED
         }
         return TaskClass.BOUNDED
+    }
+
+    /**
+     * 用户是否把“广告”当成任务对象。这里不做具体平台/任务卡名匹配，
+     * “看个广告”“看激励广告”“刷广告视频领现金”都能归到同一条广告任务路线。
+     */
+    fun isExplicitAdRewardTask(userText: String): Boolean {
+        val text = userText.replace(Regex("\\s+"), "")
+        explicitAdTask.find(text) ?: return false
+        return !negatedAdTask.containsMatchIn(text)
     }
 
     /**

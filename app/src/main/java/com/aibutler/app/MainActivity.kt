@@ -1940,8 +1940,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 明确「看广告」任务不能在普通视频流里滑动。系统按语义代点赚钱/看广告入口，
                 // 避免视觉模型把「刷金币」误解成开放式刷视频。
-                val explicitAdTask = !passiveVideoTask && PageGuard.isRewardTask(userText) &&
-                    Regex("看广告|刷广告|浏览广告").containsMatchIn(userText)
+                val explicitAdTask = !passiveVideoTask &&
+                    TaskCompletionVerifier.isExplicitAdRewardTask(userText)
                 if (explicitAdTask && PageGuard.isVideoFeed(compactGuardDump)) {
                     adTaskFeedRounds++
                     if (adTaskFeedRounds >= 2) {

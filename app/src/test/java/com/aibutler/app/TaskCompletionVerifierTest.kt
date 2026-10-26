@@ -29,6 +29,14 @@ class TaskCompletionVerifierTest {
         assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("去抖音刷视频赚金币"))
         assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("刷视频赚钱"))
         assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("看广告赚金币"))
+    }
+
+    @Test
+    fun classify_看广告同义词是开放式() {
+        assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("去抖音看个广告赚金币"))
+        assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("刷广告视频领金币"))
+        assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("看激励广告拿积分"))
+        assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("浏览广告得收益"))
         assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("去快手挂机做任务"))
         assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("刷会儿抖音"))
         assertEquals(TaskCompletionVerifier.TaskClass.OPEN_ENDED, TaskCompletionVerifier.classify("逛一下小红书"))
