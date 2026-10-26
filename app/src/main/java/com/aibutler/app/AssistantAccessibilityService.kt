@@ -1132,19 +1132,51 @@ class AssistantAccessibilityService : AccessibilityService() {
         val (screenWidth, screenHeight) = realScreenSize()
         val px = ((nx.coerceIn(0, 999) / 999.0) * screenWidth).toInt()
         val py = ((ny.coerceIn(0, 999) / 999.0) * screenHeight).toInt()
+        val containers = ArrayList<Rect>()
+
+        fun collectContainers(node: AccessibilityNodeInfo?) {
+            if (node == null) return
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (!bounds.isEmpty && bounds.contains(px, py)) containers.add(bounds)
+            for (index in 0 until node.childCount) {
+                try {
+                    collectContainers(node.getChild(index))
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        collectContainers(root)
+        windows?.forEach { window ->
+            window.root?.let { root ->
+                if (root.packageName == rootInActiveWindow?.packageName) collectContainers(root)
+            }
+        }
+
+        val minHeight = maxOf((screenHeight * 0.045).toInt(), 60)
+        val maxHeight = (screenHeight * 0.60).toInt()
+        val minWidth = (screenWidth * 0.22).toInt()
+        val card = containers
+            .filter { it.width() >= minWidth && it.height() in minHeight..maxHeight }
+            .minByOrNull { it.width() * it.height() }
+
         val zone = Rect(
             px - (screenWidth * 0.22).toInt(),
             py - (screenHeight * 0.07).toInt(),
             px + (screenWidth * 0.22).toInt(),
             py + (screenHeight * 0.07).toInt()
         )
+        val evidenceBounds = card ?: zone
         val texts = LinkedHashSet<String>()
 
         fun walk(n: AccessibilityNodeInfo?) {
             if (n == null || texts.size >= 24) return
             val r = Rect()
             n.getBoundsInScreen(r)
-            if (!r.isEmpty && Rect.intersects(r, zone)) {
+            val centerX = r.centerX()
+            val centerY = r.centerY()
+            if (!r.isEmpty && evidenceBounds.contains(centerX, centerY)) {
                 val t = sequenceOf(
                     n.text?.toString()?.trim().orEmpty(),
                     n.contentDescription?.toString()?.trim().orEmpty()

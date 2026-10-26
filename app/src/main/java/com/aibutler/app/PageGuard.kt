@@ -156,26 +156,40 @@ object PageGuard {
     private fun verbsIn(text: String): Set<String> =
         missionVerbs.filterValues { it.containsMatchIn(normalize(text)) }.keys
 
+    private val connectorVerbs = setOf("参与")
+    private val rewardOutcome = Regex("金币|现金|积分|奖励|赚钱|收益|佣金")
+    private val rewardTaskRoute = Regex(
+        "任务中心|任务列表|赚钱任务|奖励中心|收益中心|去赚钱|去赚金币|做任务|领任务|钱包|金币收益|现金收益"
+    )
+
+    private fun isRewardRouteTap(task: String, label: String): Boolean =
+        isRewardTask(task) && rewardTaskRoute.containsMatchIn(normalize(label))
+
+    private fun specificVerbsIn(text: String): Set<String> = verbsIn(text) - connectorVerbs
+
+    private fun specificContextVerbs(context: String): List<Set<String>> =
+        context.split(Regex(" / |\\s+")).map(::specificVerbsIn)
+
     /**
-     * 目标是否跑偏：按钮文字明确是别的动作 → 跑偏；按钮中性时，
-     * 看周围图文指向的目的地——只要目的地点名了任务之外的动作 → 跑偏。
+     * 目标是否跑偏：按钮自带明确动作时按按钮判断；按钮中性时才看卡片语境。
+     * 「任务中心/去赚钱/钱包」是奖励任务的路由，不属于另一种玩法。
      */
     fun isOffMissionTap(task: String, label: String, context: String = ""): Boolean {
-        val taskVerbs = verbsIn(taskTextForMission(task))
-        if (taskVerbs.isEmpty()) return false
-        if (isRewardTask(task) && Regex("任务中心|赚钱任务|去赚钱|去赚金币|赚钱|赚金币")
-            .containsMatchIn(normalize(label))
-        ) return false
-        val labelVerbs = verbsIn(label)
-        if (labelVerbs.isNotEmpty() && labelVerbs.intersect(taskVerbs).isEmpty()) return true
+        val taskVerbs = specificVerbsIn(taskTextForMission(task))
+        val taskHasReward = rewardOutcome.containsMatchIn(taskTextForMission(task))
+        if (taskVerbs.isEmpty() && !taskHasReward) return false
+        if (isRewardRouteTap(task, label)) return false
 
-        val segmentVerbs = context.split(Regex(" / |\\s+")).map(::verbsIn)
-        if (segmentVerbs.all { it.isEmpty() }) return false
+        val labelVerbs = specificVerbsIn(label)
+        if (labelVerbs.isNotEmpty()) {
+            if (labelVerbs.intersect(taskVerbs).isEmpty()) return true
+            return specificContextVerbs(context)
+                .any { it.isNotEmpty() && it.intersect(taskVerbs).isEmpty() }
+        }
+
+        val segmentVerbs = specificContextVerbs(context)
         val alignedSegments = segmentVerbs.filter { it.intersect(taskVerbs).isNotEmpty() }
         val conflictingSegments = segmentVerbs.filter { it.isNotEmpty() && it.intersect(taskVerbs).isEmpty() }
-        if (labelVerbs.intersect(taskVerbs).isNotEmpty()) {
-            return conflictingSegments.isNotEmpty()
-        }
         if (alignedSegments.isNotEmpty() && conflictingSegments.isEmpty()) return false
         return alignedSegments.isEmpty() || conflictingSegments.isNotEmpty()
     }

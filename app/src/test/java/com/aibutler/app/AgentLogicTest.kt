@@ -717,6 +717,18 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_奖励路由不被当前页面背景污染() {
+        val pageNoise = "刚刚看过 / 暂停视频 / 同城 / 音乐转盘 / 拍摄 / 点赞 / 评论 / 分享"
+        listOf("任务中心", "赚钱任务", "去赚钱", "去赚金币", "奖励中心", "收益中心", "钱包")
+            .forEach { route ->
+                assertFalse(PageGuard.isOffMissionTap("去极速版看广告赚金币", route, pageNoise))
+                assertFalse(PageGuard.isOffMissionTap("帮我签到领金币", route, pageNoise))
+            }
+        assertTrue(PageGuard.isOffMissionTap("看广告赚金币", "看直播领金币", pageNoise))
+        assertTrue(PageGuard.isOffMissionTap("看广告赚金币", "去观看", "幸运抽奖 转盘赢大奖"))
+    }
+
+    @Test
     fun 刷视频赚金币_按普通视频流处理() {
         assertTrue(AgentEngine.isPassiveVideoTask("去抖音极速版刷视频赚金币"))
         assertTrue(AgentEngine.isPassiveVideoTask("看视频刷金币"))
