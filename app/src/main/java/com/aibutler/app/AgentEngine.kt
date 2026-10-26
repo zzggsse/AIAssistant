@@ -30,15 +30,24 @@ object AgentEngine {
         badEntryPoints.clear()
     }
 
-    private fun isBadEntry(x: Int, y: Int): Boolean =
+    private fun isBadEntry(x999: Int, y999: Int): Boolean =
         badEntryPoints.any { (bx, by) ->
-            val dx = bx - x; val dy = by - y
-            dx * dx + dy * dy <= 1600
+            val dx = bx - x999; val dy = by - y999
+            dx * dx + dy * dy <= 625
         }
 
-    private fun recordClick(x: Int, y: Int) {
-        lastClickedPoint = x to y
+    private fun toNorm(pixel: Int, total: Int): Int =
+        ((pixel.coerceIn(0, total) / total.toDouble()) * 999).toInt().coerceIn(0, 999)
+
+    private fun recordClick(x999: Int, y999: Int) {
+        lastClickedPoint = x999 to y999
     }
+
+    fun recordClickPixel(x: Int, y: Int, screenW: Int, screenH: Int) =
+        recordClick(toNorm(x, screenW), toNorm(y, screenH))
+
+    fun isBadEntryPixel(x: Int, y: Int, screenW: Int, screenH: Int) =
+        isBadEntry(toNorm(x, screenW), toNorm(y, screenH))
 
     private fun markLastClickBad() {
         lastClickedPoint?.let { badEntryPoints.add(it) }
@@ -1012,12 +1021,18 @@ object AgentEngine {
                     } else {
                     val targetX = norm(corrected.first, realW).toFloat()
                     val targetY = norm(corrected.second, realH).toFloat()
+                    if (isBadEntry(corrected.first, corrected.second)) {
+                        AglmResult("⚠️ 坐标(${corrected.first},${corrected.second})之前点击后跳到了错误页面并已返回。绝不要再点这里，换其他入口或滑动找新路。", false)
+                    } else {
                     svc?.showActionPreview(targetX, targetY, nearbyLabel)
+                    val tapped = svc?.tap(targetX, targetY) == true
+                    if (tapped) recordClick(corrected.first, corrected.second)
                     AglmResult(
-                    if (svc?.tap(targetX, targetY) == true)
+                    if (tapped)
                         "已点击屏幕(${corrected.first},${corrected.second})" +
                             if (correctedLabel.isBlank()) "" else "→${correctedLabel}"
                     else DeviceTools.NO_A11Y, false)
+                    }
                     }
                     }
             }
@@ -1034,6 +1049,7 @@ object AgentEngine {
                         "已滑动(${s.first},${s.second})→(${e.first},${e.second})" else DeviceTools.NO_A11Y, false)
             }
             "Back" -> {
+                markLastClickBad()
                 val sequenceTarget = if (screenDump.isNullOrBlank()) null else {
                     val clickable = Regex(
                         "可点击:\\s*(.+?)\\s*\\[(\\d+),(\\d+)\\]\\s*$",
@@ -1374,11 +1390,12 @@ object AgentEngine {
                     if (svc2 == null) DeviceTools.NO_A11Y
                     else {
                         val r = svc2.lastElementRect(idx)
-                        if (r != null && isBadEntry(r.centerX(), r.centerY())) {
+                        val (sw, sh) = svc2.realScreenSize()
+                        if (r != null && isBadEntryPixel(r.centerX(), r.centerY(), sw, sh)) {
                             "⚠️ 坐标(${r.centerX()},${r.centerY()})之前点击后跳到了错误页面，已按返回键退出过。请选择其他入口或改用 look_screen 视觉识别重新定位。"
                         } else {
                             val result = svc2.clickNumber(idx)
-                            if (r != null) recordClick(r.centerX(), r.centerY())
+                            if (r != null) recordClickPixel(r.centerX(), r.centerY(), sw, sh)
                             result
                         }
                     }
@@ -1465,17 +1482,20 @@ object AgentEngine {
             "tap_point" -> {
                 val x = s("x").toFloatOrNull(); val y = s("y").toFloatOrNull()
                 if (x == null || y == null) "x/y 参数无效"
-                else if (isBadEntry(x.toInt(), y.toInt())) {
+                else {
+                    val (sw, sh) = svc?.realScreenSize() ?: Pair(1080, 2400)
+                    if (isBadEntryPixel(x.toInt(), y.toInt(), sw, sh)) {
                     "⚠️ 坐标($x,$y)之前点击后跳到了错误页面，已按返回键退出过。请选择其他入口或改用 look_screen 视觉识别重新定位。"
-                } else {
+                    } else {
                     val nearby = svc?.labelAtPixel(x.toInt(), y.toInt()) ?: ""
                     if (isSensitiveButton(nearby)) "🛑 安全拦截：坐标($x,$y)附近元素「${nearby.take(40)}」涉及付款/下单/验证，已阻止自动点击。请告诉用户手动确认这一步。"
                     else {
                         svc?.showActionPreview(x, y, nearby)
                         if (svc?.tap(x, y) == true) {
-                            recordClick(x.toInt(), y.toInt())
+                            recordClickPixel(x.toInt(), y.toInt(), sw, sh)
                             "已在坐标($x,$y)点击"
                         } else DeviceTools.NO_A11Y
+                    }
                     }
                 }
             }
