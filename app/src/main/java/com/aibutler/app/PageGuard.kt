@@ -374,11 +374,23 @@ object PageGuard {
             val text = normalize(label)
             rewardCloseGlyph.containsMatchIn(text) && !rewardAdTransform.containsMatchIn(text)
         }
+        val unnamedCloseRows = rows.filter { (label, _, _) -> label == "无文字元素" }
 
         // Same row first: the glyph belongs to the result toast/banner, not to an unrelated corner.
         for (anchor in anchors) {
             closeGlyphRows
                 .filter { (_, x, y) -> isSameRewardRow(anchor.second, anchor.third, x, y) }
+                .minByOrNull { (_, x, y) -> abs(x - anchor.second) + abs(y - anchor.third) }
+                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+        }
+
+        for (anchor in anchors) {
+            unnamedCloseRows
+                .filter { (_, x, y) ->
+                    abs(y - anchor.third) <= 35 &&
+                        x > anchor.second &&
+                        x - anchor.second <= 650
+                }
                 .minByOrNull { (_, x, y) -> abs(x - anchor.second) + abs(y - anchor.third) }
                 ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
         }

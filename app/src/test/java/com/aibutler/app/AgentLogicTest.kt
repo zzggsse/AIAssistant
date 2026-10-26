@@ -941,6 +941,20 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 奖励完成层_完成提示同一行的无名关闭控件可识别() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 已成功领取奖励 广告 购买后确认收货最高再得金币\n" +
+            "可点击: 已成功领取奖励 {countdown_info_container,LinearLayout} [263,87]\n" +
+            "可点击: 无文字元素 {video_countdown_end_icon,ImageView} [736,87]\n" +
+            "可点击: 黛青丝个护旗舰店 {,ViewGroup} [499,496]\n" +
+            "可点击: 点击并浏览15秒 额外得330金币 {,Button} [499,840]"
+
+        val result = PageGuard.rewardCompletionExit(dump)
+        assertNotNull(result)
+        assertEquals("无文字元素", result!!.closeLabel)
+    }
+
+    @Test
     fun 奖励完成层_普通页面和活跃倒计时不触发() {
         val taskCenter = "当前应用: com.any.reward.app\n" +
             "页面内容: 任务中心 看广告赚金币 立即领取\n" +
