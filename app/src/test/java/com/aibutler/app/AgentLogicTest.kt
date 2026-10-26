@@ -872,6 +872,18 @@ class AgentLogicTest {
         assertNull(PageGuard.rewardContinueLabel(dump, null))
     }
 
+    @Test
+    fun 页面防护_奖励到账证据可进入收尾退出() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 已成功领取奖励 广告 点击并浏览15秒额外得330金币\n" +
+            "可点击: 坚持退出 [180,240]\n" +
+            "可点击: 点击并浏览15秒额外得330金币 [640,980]"
+
+        assertTrue(PageGuard.hasRewardBeenClaimed(dump))
+        assertEquals("坚持退出", PageGuard.safeAdExitLabel(dump))
+        assertFalse(PageGuard.hasRewardBeenClaimed("当前应用: com.any.reward.app\n页面内容: 看广告30秒后可领奖励"))
+    }
+
     // ========== PopupGuard：通用阻塞性弹窗硬关闭层 ==========
 
     @Test

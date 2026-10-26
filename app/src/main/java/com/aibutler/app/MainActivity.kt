@@ -2759,6 +2759,39 @@ class MainActivity : AppCompatActivity() {
                     if (trapHit != null) {
                         jumpBlockStreak++
                         val blockedLabel = recParsed.second.take(40)
+                        val rewardPaid = PageGuard.hasRewardBeenClaimed(screenDump)
+                        val backAlreadyFailed = jumpBlockStreak >= 4 && prevRoundDumpSig == dumpSigNow
+                        val shouldStop = jumpBlockStreak >= 5 ||
+                            (rewardPaid && backAlreadyFailed)
+                        if (shouldStop) {
+                            val exitLabel = PageGuard.safeAdExitLabel(screenDump)
+                            if (exitLabel != null) {
+                                AssistantAccessibilityService.instance?.clickText(exitLabel)
+                            }
+                            AssistantAccessibilityService.instance?.pressBack()
+                            AssistantAccessibilityService.instance?.home()
+                            finalReply = if (rewardPaid) {
+                                "✅ 页面显示奖励已领取。继续奖励入口会跳出目标应用，且广告层无法退出，为避免误操作已停止。"
+                            } else {
+                                "⚠️ 该入口反复会跳出目标应用，返回和通用关闭都无法离开广告层，为避免误操作已停止。"
+                            }
+                            android.util.Log.i(
+                                "AIButler",
+                                "AGLM reward/jump trap unrecoverable: streak=$jumpBlockStreak, paid=$rewardPaid"
+                            )
+                            break
+                        }
+                        val escapeNote = if (rewardPaid || jumpBlockStreak >= 3) {
+                            val exitLabel = PageGuard.safeAdExitLabel(screenDump)
+                            val escaped = exitLabel != null &&
+                                AssistantAccessibilityService.instance?.clickText(exitLabel)?.startsWith("已") == true
+                            if (!escaped) AssistantAccessibilityService.instance?.pressBack()
+                            if (rewardPaid) {
+                                "页面奖励已领取，系统正在退出当前广告层；请先回到任务中心再开始下一轮。"
+                            } else {
+                                "已连续${jumpBlockStreak}次撞拦截，系统正在退出当前广告层。"
+                            }
+                        } else ""
                         runOnUiThread {
                             adapter.add(ChatAdapter.Msg("system", "🛑 已拦截重复点击外跳入口「$blockedLabel」"))
                             rv.scrollToPosition(adapter.items.size - 1)
@@ -2769,7 +2802,7 @@ class MainActivity : AppCompatActivity() {
                                 "content",
                                 "🛑 系统提示：「$blockedLabel」这个入口你刚才点过一次，点击后页面被拉出了目标应用，系统已拦截这次点击。" +
                                     "绝不能再点它或同类广告/下载入口；请换与「$userText」直接相关的原生入口，找不到就 Back 或 Swipe。" +
-                                    (if (jumpBlockStreak >= 3) "已连续${jumpBlockStreak}次撞拦截，先输出 Back 离开当前页面。" else "")
+                                    escapeNote
                             )
                         })
                         continue

@@ -228,6 +228,12 @@ object PageGuard {
         return weak >= 3
     }
 
+    /** A visible reward-receipt proves the current rewarded-ad cycle has paid out. */
+    fun hasRewardBeenClaimed(screenDump: String): Boolean = Regex(
+        "已成功领取|领取成功|奖励已发放|已到账|额外奖励已到手",
+        RegexOption.IGNORE_CASE
+    ).containsMatchIn(normalize(screenDump))
+
     /**
      * The ordinary short-video feed is the wrong place for an explicit “watch ad” task.
      * Require both feed navigation and player affordances, and exclude reward centers,
