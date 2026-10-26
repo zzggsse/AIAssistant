@@ -2043,7 +2043,7 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 // 🎰 投币/报名/抽奖活动页：会消耗或锁定金币，不是看广告路线，立即退出
-                if (PageGuard.isRewardTask(userText) && PageGuard.isRewardActivityPage(compactGuardDump)) {
+                if (PageGuard.isRewardTask(userText) && PageGuard.isRewardActivityPage(compactGuardDump, userText)) {
                     if (lastCardLabel.isNotBlank() && appPkg == lastCardPkg && round - lastCardRound <= 6) {
                         TaskCardMemory.mark(this, appPkg, lastCardLabel, good = false)
                     }
@@ -2052,7 +2052,7 @@ class MainActivity : AppCompatActivity() {
                     rewardActivityExitRounds++
                     android.util.Log.i("AIButler", "AGLM reward-activity exit #$rewardActivityExitRounds: pkg=$appPkg")
                     runOnUiThread {
-                        adapter.add(ChatAdapter.Msg("system", "🎰 发现投币/抽奖类活动页，已自动返回（防止消耗金币）"))
+                        adapter.add(ChatAdapter.Msg("system", "🎯 发现与任务无关的活动页，已自动返回"))
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
                     if (rewardActivityExitRounds >= 3) {
@@ -2228,10 +2228,9 @@ class MainActivity : AppCompatActivity() {
                         "\n🚫 系统记忆：这些入口本任务内已实测会跳出目标应用，绝不能再点：${hits.joinToString("、")}。请换与任务直接相关的原生入口。"
                     else ""
                 } else ""
-                val adAnchorNote = if (TaskCompletionVerifier.isExplicitAdRewardTask(userText))
-                    "\n🎯 任务锚定：用户只要「看广告」。本轮只允许点：广告/视频广告/激励广告卡片、去赚钱或任务中心入口、" +
-                        "广告页里的继续观看/领取/关闭类按钮。签到、开宝箱、抽奖、投币、报名、参与、邀请、提现、兑换、逛逛等其他功能一律不是本任务，" +
-                        "绝不点击；看完广告按流程领取后回任务中心再来一轮。"
+                val adAnchorNote = if (PageGuard.hasMissionVerbs(userText))
+                    "\n🎯 任务锚定：只执行用户点名的玩法，优先点击与任务目标直接对应的入口、继续/领取/关闭控件；" +
+                        "页面上的其他任务、活动、下载、跳转入口都不是本任务，绝不点击。"
                 else ""
                 val pickerSnapshot = TaskGoalVerifier.PickerSnapshot.from(screenDump)
                 pickerTracker.observe(pickerSnapshot)

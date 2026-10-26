@@ -90,43 +90,91 @@ object PageGuard {
     fun isUnsafeRewardTap(task: String, label: String): Boolean {
         if (!isRewardTask(task) || isLiveIntentTask(task)) return false
         val text = normalize(label)
-        return Regex(
-            "直播|开播|主播|立即支付|去支付|确认支付|提交订单|确认订单|立即购买|立即抢购|" +
-                "加入购物车|进店|商品详情|下载|安装|试玩|去体验|" +
-                "投币|报名|立即参与|抽奖"
+        val isPaymentLike = Regex(
+            "立即支付|去支付|确认支付|提交订单|确认订单|立即购买|立即抢购|加入购物车"
         ).containsMatchIn(text)
+        if (isPaymentLike || !hasMissionVerbs(task)) {
+            return isPaymentLike || Regex(
+                "直播|开播|主播|立即支付|去支付|确认支付|提交订单|确认订单|立即购买|立即抢购|" +
+                    "加入购物车|进店|商品详情|下载|安装|试玩|去体验|" +
+                    "投币|报名|立即参与|抽奖"
+            ).containsMatchIn(text)
+        }
+        return false
     }
 
     /**
      * 奖励任务里的投币/报名/抽奖类活动页：会消耗或锁定金币，不是看广告路线。
      * 必须同时出现「参与类动词」和「暴涨/翻倍/瓜分」类 hype 词，普通任务卡不误伤。
+     * 如果用户任务本身点名了对应玩法，则这是任务目的地，不应拦截。
      */
-    fun isRewardActivityPage(screenDump: String): Boolean {
+    fun isRewardActivityPage(screenDump: String, task: String = ""): Boolean {
         val text = normalize(screenDump)
         val commit = Regex("立即投币|投币报名|一键报名|立即报名|立即参与|去报名")
         val hype = Regex("暴涨|翻倍|瓜分|大奖|必得|赢取|锦鲤|抽奖")
-        return commit.containsMatchIn(text) && hype.containsMatchIn(text)
+        if (!commit.containsMatchIn(text) || !hype.containsMatchIn(text)) return false
+
+        val taskVerbs = verbsIn(taskTextForMission(task))
+        if (taskVerbs.isEmpty()) return true
+        val destinationVerbs = verbsIn(text)
+        return destinationVerbs.intersect(taskVerbs).isEmpty()
     }
 
     /**
-     * 任务锚定：用户点名「看广告」时，其余功能入口一律视为跑偏。
-     * 标签本身带广告语义（广告/激励/播放/继续观看）时不拦，兼容「参与看广告赢金币」类措辞。
+     * 任务动词表：用户任务点名了哪些动作，就锚定哪些动作。
+     * 目标（按钮文字或周围图文）命中的动作与任务命名的动作完全不同 → 跑偏，拦截。
+     * 数据驱动：换任务、换App都按同一张表判断，不写死任何单一场景。
      */
-    fun isOffMissionAdTap(task: String, label: String): Boolean {
-        if (!TaskCompletionVerifier.isExplicitAdRewardTask(normalize(task))) return false
-        val text = normalize(label)
-        if (Regex("广告|激励|播放|继续观看|领取").containsMatchIn(text)) return false
-        return Regex("签到|宝箱|开宝箱|抽奖|投币|报名|参与|邀请|提现|兑换|逛逛|游戏|试玩")
-            .containsMatchIn(text)
-    }
+    private val missionVerbs = linkedMapOf(
+        "广告" to Regex("广告|激励|观看|播放|继续看"),
+        "视频" to Regex("视频"),
+        "签到" to Regex("签到"),
+        "宝箱" to Regex("宝箱"),
+        "抽奖" to Regex("抽奖|转盘"),
+        "投币" to Regex("投币"),
+        "报名" to Regex("报名"),
+        "参与" to Regex("参与|参加"),
+        "直播" to Regex("直播"),
+        "搜索" to Regex("搜索|搜一搜|搜一下"),
+        "下载" to Regex("下载|安装"),
+        "游戏" to Regex("试玩|玩游戏"),
+        "邀请" to Regex("邀请"),
+        "提现" to Regex("提现|兑换"),
+        "逛街" to Regex("逛一逛|去逛逛|逛街"),
+        "下单" to Regex("下单|订单|购买|抢购|支付|付款")
+    )
+
+    /** 去掉短否定短语，但保留后面的正向任务（「不要下载只看广告」仍锚定广告） */
+    private fun taskTextForMission(task: String): String =
+        Regex("(不要|别再?|禁止|避免|不得)(?:[^，。,；;！!？?]*?)(?=$|[，。,；;！!？?]|而|改|只|然后)")
+            .replace(normalize(task), "")
+
+    /** 任务是否点名了具体动作（点名了才做锚定，模糊任务走通用安全红线） */
+    fun hasMissionVerbs(task: String): Boolean =
+        missionVerbs.values.any { it.containsMatchIn(taskTextForMission(task)) }
+
+    private fun verbsIn(text: String): Set<String> =
+        missionVerbs.filterValues { it.containsMatchIn(normalize(text)) }.keys
 
     /**
-     * 点击点周围图文里的强落地页信号：按钮文字无辜（如「去观看」），但卡片标题/配图描述/
-     * 小字说明指向投币、抽奖、下载或直播页时，点击与看广告任务不符。
+     * 目标是否跑偏：按钮文字明确是别的动作 → 跑偏；按钮中性时，
+     * 看周围图文指向的目的地——只要目的地点名了任务之外的动作 → 跑偏。
      */
-    fun isRiskyAdContext(task: String, context: String): Boolean {
-        if (!TaskCompletionVerifier.isExplicitAdRewardTask(normalize(task))) return false
-        return Regex("投币|抽奖|下载|安装|直播").containsMatchIn(normalize(context))
+    fun isOffMissionTap(task: String, label: String, context: String = ""): Boolean {
+        val taskVerbs = verbsIn(taskTextForMission(task))
+        if (taskVerbs.isEmpty()) return false
+        val labelVerbs = verbsIn(label)
+        if (labelVerbs.isNotEmpty() && labelVerbs.intersect(taskVerbs).isEmpty()) return true
+
+        val segmentVerbs = context.split(Regex(" / |\\s+")).map(::verbsIn)
+        if (segmentVerbs.all { it.isEmpty() }) return false
+        val alignedSegments = segmentVerbs.filter { it.intersect(taskVerbs).isNotEmpty() }
+        val conflictingSegments = segmentVerbs.filter { it.isNotEmpty() && it.intersect(taskVerbs).isEmpty() }
+        if (labelVerbs.intersect(taskVerbs).isNotEmpty()) {
+            return conflictingSegments.isNotEmpty()
+        }
+        if (alignedSegments.isNotEmpty() && conflictingSegments.isEmpty()) return false
+        return alignedSegments.isEmpty() || conflictingSegments.isNotEmpty()
     }
 
     /**

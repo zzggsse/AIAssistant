@@ -661,45 +661,52 @@ class AgentLogicTest {
     }
 
     @Test
-    fun 页面防护_通用奖励卡只拦高风险语义() {
-        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "看直播领金币"))
-        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "下载APP得奖励"))
-        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "立即投币报名"))
-        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "立即参与"))
-        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "幸运抽奖"))
+    fun 页面防护_模糊奖励任务只拦高风险语义() {
+        assertTrue(PageGuard.isUnsafeRewardTap("帮我赚钱", "看直播领金币"))
+        assertTrue(PageGuard.isUnsafeRewardTap("帮我赚钱", "下载APP得奖励"))
+        assertTrue(PageGuard.isUnsafeRewardTap("帮我赚钱", "立即投币报名"))
+        assertTrue(PageGuard.isUnsafeRewardTap("帮我赚钱", "立即参与"))
+        assertTrue(PageGuard.isUnsafeRewardTap("帮我赚钱", "幸运抽奖"))
         assertFalse(PageGuard.isUnsafeRewardTap("看广告刷金币", "观看广告领金币"))
         assertFalse(PageGuard.isUnsafeRewardTap("看直播领金币", "进入直播间"))
     }
 
     @Test
-    fun 页面防护_投币抽奖活动页识别() {
-        assertTrue(PageGuard.isRewardActivityPage("立即投币报名 完整参与金币必暴涨"))
-        assertTrue(PageGuard.isRewardActivityPage("立即参与 千万金币瓜分"))
+    fun 页面防护_投币抽奖活动页按任务对齐() {
+        assertTrue(PageGuard.isRewardActivityPage("立即投币报名 完整参与金币必暴涨", "看广告赚金币"))
+        assertTrue(PageGuard.isRewardActivityPage("立即参与 千万金币瓜分", "看广告赚金币"))
+        assertFalse(PageGuard.isRewardActivityPage("立即投币报名 完整参与金币必暴涨", "帮我投币抽大奖"))
+        assertFalse(PageGuard.isRewardActivityPage("立即参与 千万金币瓜分", "参与抽奖赢金币"))
         assertFalse(PageGuard.isRewardActivityPage("立即投币"))
         assertFalse(PageGuard.isRewardActivityPage("看广告得金币 立即观看"))
     }
 
     @Test
-    fun 页面防护_看广告任务锚定其他入口() {
-        val task = "去快手极速版看广告赚金币"
-        assertTrue(PageGuard.isOffMissionAdTap(task, "立即参与"))
-        assertTrue(PageGuard.isOffMissionAdTap(task, "立即投币报名 完整参与金币必暴涨"))
-        assertTrue(PageGuard.isOffMissionAdTap(task, "每日签到"))
-        assertTrue(PageGuard.isOffMissionAdTap(task, "开宝箱"))
-        assertFalse(PageGuard.isOffMissionAdTap(task, "看广告得金币"))
-        assertFalse(PageGuard.isOffMissionAdTap(task, "参与看广告赢金币"))
-        assertFalse(PageGuard.isOffMissionAdTap(task, "去赚钱"))
-        assertFalse(PageGuard.isOffMissionAdTap("帮我签到领金币", "每日签到"))
+    fun 页面防护_点击目标与任务对齐() {
+        val adTask = "去极速版看广告赚金币"
+        assertTrue(PageGuard.isOffMissionTap(adTask, "立即参与"))
+        assertTrue(PageGuard.isOffMissionTap(adTask, "立即投币报名 完整参与金币必暴涨"))
+        assertTrue(PageGuard.isOffMissionTap(adTask, "每日签到"))
+        assertTrue(PageGuard.isOffMissionTap(adTask, "开宝箱"))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "看广告得金币"))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "参与看广告赢金币"))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "去赚钱"))
+
+        assertTrue(PageGuard.isOffMissionTap("帮我签到领金币", "看广告得金币"))
+        assertFalse(PageGuard.isOffMissionTap("帮我签到领金币", "每日签到"))
+        assertFalse(PageGuard.isOffMissionTap("去参加幸运抽奖", "幸运抽奖"))
     }
 
     @Test
-    fun 页面防护_卡片语境暴露真实去向() {
-        val task = "去快手极速版看广告赚金币"
-        assertTrue(PageGuard.isRiskyAdContext(task, "立即投币报名 完整参与金币必暴涨"))
-        assertTrue(PageGuard.isRiskyAdContext(task, "幸运抽奖 转盘赢大奖"))
-        assertTrue(PageGuard.isRiskyAdContext(task, "下载APP领现金"))
-        assertFalse(PageGuard.isRiskyAdContext(task, "看广告得金币 立即观看"))
-        assertFalse(PageGuard.isRiskyAdContext("帮我签到领金币", "立即投币报名"))
+    fun 页面防护_中性按钮按卡片语境判断去向() {
+        val adTask = "看广告赚金币"
+        assertTrue(PageGuard.isOffMissionTap(adTask, "立即参与", "投币报名 完整参与金币必暴涨"))
+        assertTrue(PageGuard.isOffMissionTap(adTask, "去观看", "幸运抽奖 转盘赢大奖"))
+        assertTrue(PageGuard.isOffMissionTap(adTask, "去观看", "下载APP领现金"))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "去观看", "看广告得金币 立即观看"))
+        assertTrue(PageGuard.isOffMissionTap("不要下载只看广告", "立即下载"))
+        assertTrue(PageGuard.isOffMissionTap("不要下载只看广告", "去观看", "下载APP领现金"))
+        assertFalse(PageGuard.isOffMissionTap("不要下载只看广告", "看广告得金币"))
     }
 
     @Test
@@ -807,7 +814,7 @@ class AgentLogicTest {
         )
 
         assertEquals("__JUMP_BLOCK__", result.message)
-        assertTrue(result.info.contains("已拦截奖励任务里的高风险入口"))
+        assertTrue(result.info.contains("与当前任务"))
     }
 
     @Test
