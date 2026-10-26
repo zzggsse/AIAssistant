@@ -20,6 +20,31 @@ import java.util.concurrent.TimeUnit
  */
 object AgentEngine {
 
+    /** 记住本轮任务内最后点击的坐标，press_back 后把该坐标标为坏入口，防止返回后重复点同一个错误位置 */
+    private var lastClickedPoint: Pair<Int, Int>? = null
+    private val badEntryPoints = LinkedHashSet<Pair<Int, Int>>()
+
+    /** 每个新任务开始时调用，清掉上一轮的坏入口记忆 */
+    fun resetNavigationMemory() {
+        lastClickedPoint = null
+        badEntryPoints.clear()
+    }
+
+    private fun isBadEntry(x: Int, y: Int): Boolean =
+        badEntryPoints.any { (bx, by) ->
+            val dx = bx - x; val dy = by - y
+            dx * dx + dy * dy <= 1600
+        }
+
+    private fun recordClick(x: Int, y: Int) {
+        lastClickedPoint = x to y
+    }
+
+    private fun markLastClickBad() {
+        lastClickedPoint?.let { badEntryPoints.add(it) }
+        lastClickedPoint = null
+    }
+
     // ========== 任务规划 ==========
 
     data class PlanStep(val id: Int, val action: String, val doneHint: String)
@@ -1345,7 +1370,18 @@ object AgentEngine {
                 if (isSensitiveButton(label)) {
                     "🛑 安全拦截：编号$idx 的元素「${label.take(40)}」涉及付款/下单/验证，已阻止自动点击。请告诉用户手动确认这一步。"
                 } else {
-                    svc?.clickNumber(idx) ?: DeviceTools.NO_A11Y
+                    val svc2 = svc
+                    if (svc2 == null) DeviceTools.NO_A11Y
+                    else {
+                        val r = svc2.lastElementRect(idx)
+                        if (r != null && isBadEntry(r.centerX(), r.centerY())) {
+                            "⚠️ 坐标(${r.centerX()},${r.centerY()})之前点击后跳到了错误页面，已按返回键退出过。请选择其他入口或改用 look_screen 视觉识别重新定位。"
+                        } else {
+                            val result = svc2.clickNumber(idx)
+                            if (r != null) recordClick(r.centerX(), r.centerY())
+                            result
+                        }
+                    }
                 }
             }
             "wake_unlock_screen" -> wakeAndUnlock(a)
@@ -1429,17 +1465,25 @@ object AgentEngine {
             "tap_point" -> {
                 val x = s("x").toFloatOrNull(); val y = s("y").toFloatOrNull()
                 if (x == null || y == null) "x/y 参数无效"
-                else {
+                else if (isBadEntry(x.toInt(), y.toInt())) {
+                    "⚠️ 坐标($x,$y)之前点击后跳到了错误页面，已按返回键退出过。请选择其他入口或改用 look_screen 视觉识别重新定位。"
+                } else {
                     val nearby = svc?.labelAtPixel(x.toInt(), y.toInt()) ?: ""
                     if (isSensitiveButton(nearby)) "🛑 安全拦截：坐标($x,$y)附近元素「${nearby.take(40)}」涉及付款/下单/验证，已阻止自动点击。请告诉用户手动确认这一步。"
                     else {
                         svc?.showActionPreview(x, y, nearby)
-                        if (svc?.tap(x, y) == true) "已在坐标($x,$y)点击" else DeviceTools.NO_A11Y
+                        if (svc?.tap(x, y) == true) {
+                            recordClick(x.toInt(), y.toInt())
+                            "已在坐标($x,$y)点击"
+                        } else DeviceTools.NO_A11Y
                     }
                 }
             }
             "input_text" -> svc?.inputText(s("text")) ?: DeviceTools.NO_A11Y
-            "press_back" -> if (svc?.pressBack() == true) "已按返回键" else DeviceTools.NO_A11Y
+            "press_back" -> {
+                markLastClickBad()
+                if (svc?.pressBack() == true) "已按返回键" else DeviceTools.NO_A11Y
+            }
             "wait_seconds" -> {
                 val sec = (s("seconds").toIntOrNull() ?: 5).coerceIn(1, 60)
                 // 可中断等待：每 300ms 检查一次暂停请求，用户按停止时最多等 300ms 就能响应

@@ -722,6 +722,7 @@ class MainActivity : AppCompatActivity() {
         busy = true
         activeTaskText = userText
         cancelRequested = false
+        AgentEngine.resetNavigationMemory()
         TaskControlBus.taskRunning = true
         AssistantAccessibilityService.instance?.showTaskControls()
         setBusyUi(true)

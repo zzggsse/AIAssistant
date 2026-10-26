@@ -1094,6 +1094,12 @@ class AssistantAccessibilityService : AccessibilityService() {
         return lastLabels[num - 1]
     }
 
+    /** 获取最近一次读屏中某个编号的元素坐标区域，供 AgentEngine 判断坏入口 */
+    fun lastElementRect(num: Int): Rect? {
+        if (num < 1 || num > lastElements.size) return null
+        return lastElements[num - 1]
+    }
+
     /** 获取某个像素坐标附近的元素文字/描述，用于 tap_point 安全拦截 */
     fun labelAtPixel(x: Int, y: Int): String {
         val root = rootInActiveWindow ?: return ""
