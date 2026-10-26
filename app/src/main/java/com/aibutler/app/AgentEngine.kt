@@ -49,7 +49,7 @@ object AgentEngine {
     fun isBadEntryPixel(x: Int, y: Int, screenW: Int, screenH: Int) =
         isBadEntry(toNorm(x, screenW), toNorm(y, screenH))
 
-    private fun markLastClickBad() {
+    fun markLastClickBad() {
         lastClickedPoint?.let { badEntryPoints.add(it) }
         lastClickedPoint = null
     }

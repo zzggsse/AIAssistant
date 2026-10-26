@@ -499,6 +499,13 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 卡片记忆_外跳一次即判别碰() {
+        assertEquals("wall", TaskCardMemory.verdictOf(CardStat(good = 0, bad = 1, lastOutcome = "jump")))
+        assertNull(TaskCardMemory.verdictOf(CardStat(good = 0, bad = 1, lastOutcome = "wall")))
+        assertNull(TaskCardMemory.verdictOf(CardStat(good = 1, bad = 1, lastOutcome = "jump")))
+    }
+
+    @Test
     fun 卡片记忆_标签规范化() {
         assertEquals("去观看得金币", TaskCardMemory.normalizeLabel(" 去观看 得金币 "))
         assertTrue(TaskCardMemory.normalizeLabel("很长的标签文字".repeat(10)).length <= 24)

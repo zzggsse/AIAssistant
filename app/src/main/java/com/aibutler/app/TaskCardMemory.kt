@@ -71,7 +71,7 @@ object TaskCardMemory {
 
     // ========== 记账 ==========
 
-    fun mark(context: Context, pkg: String, label: String, good: Boolean): Unit = synchronized(lock) {
+    fun mark(context: Context, pkg: String, label: String, good: Boolean, outcome: String = if (good) "real" else "wall"): Unit = synchronized(lock) {
         val norm = normalizeLabel(label)
         if (pkg.isBlank() || !isReliableLabel(norm)) return
         val items = load(context)
@@ -80,7 +80,7 @@ object TaskCardMemory {
         items[key] = CardStat(
             good = old.good + if (good) 1 else 0,
             bad = old.bad + if (good) 0 else 1,
-            lastOutcome = if (good) "real" else "wall",
+            lastOutcome = outcome,
             updatedAt = System.currentTimeMillis()
         )
         // 上限 120 条，超出删最旧
@@ -94,9 +94,10 @@ object TaskCardMemory {
 
     // ========== 判定与建议（纯逻辑，可单测） ==========
 
-    /** 单张卡的判定：null=证据不足不下结论；good=优先点；wall=别碰 */
+    /** 单张卡的判定：null=证据不足不下结论；good=优先点；wall=别碰；外跳一次即判 wall */
     fun verdictOf(stat: CardStat): String? = when {
         stat.bad >= 2 && stat.good == 0 -> "wall"
+        stat.lastOutcome == "jump" && stat.good == 0 -> "wall"
         stat.good >= 1 && stat.good > stat.bad -> "good"
         else -> null
     }

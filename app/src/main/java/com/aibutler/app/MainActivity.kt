@@ -1488,6 +1488,7 @@ class MainActivity : AppCompatActivity() {
             var lastCardLabel = ""          // 任务卡记忆：最近点过的奖励页任务卡标签
             var lastCardPkg = ""            // 该卡所在的应用包名
             var lastCardRound = -99         // 点击发生在第几轮（6轮内出现证据才记账）
+            val jumpTrapLabels = LinkedHashSet<String>() // 本任务内实测会跳出目标App的入口标签（规范化后）
             var targetAppPackage: String? = null
             targetAppPackage = guessedApp?.second
             // 冷启动目标App：上一轮任务可能把它留在任意深层页面（实测：死在拍摄页污染下一轮开局）
@@ -2099,8 +2100,10 @@ class MainActivity : AppCompatActivity() {
                         lastCardLabel
                     } else lastTapLabel
                     if (lastCardLabel.isNotBlank() && round - lastCardRound <= 6) {
-                        TaskCardMemory.mark(this, targetAppPackage ?: lastCardPkg, lastCardLabel, good = false)
+                        TaskCardMemory.mark(this, targetAppPackage ?: lastCardPkg, lastCardLabel, good = false, outcome = "jump")
                     }
+                    if (trapLabel.isNotBlank()) jumpTrapLabels.add(TaskCardMemory.normalizeLabel(trapLabel))
+                    AgentEngine.markLastClickBad()
                     lastCardLabel = ""
                     wrongAppReturns++
                     val recovery = if (!unguidedMode) {
@@ -2185,6 +2188,16 @@ class MainActivity : AppCompatActivity() {
                 } else ""
                 val cardNote = if (Regex("金币|任务中心|去赚钱|奖励").containsMatchIn(screenDump))
                     TaskCardMemory.advise(this, appPkg, screenDump) else ""
+                val trapNote = if (jumpTrapLabels.isNotEmpty()) {
+                    val visible = TaskCardMemory.visibleLabels(screenDump)
+                    val hits = LinkedHashSet<String>()
+                    for (trap in jumpTrapLabels) {
+                        TaskCardMemory.matchLabel(visible, trap)?.let { hits.add(it) }
+                    }
+                    if (hits.isNotEmpty())
+                        "\n🚫 系统记忆：这些入口本任务内已实测会跳出目标应用，绝不能再点：${hits.joinToString("、")}。请换与任务直接相关的原生入口。"
+                    else ""
+                } else ""
                 val pickerSnapshot = TaskGoalVerifier.PickerSnapshot.from(screenDump)
                 pickerTracker.observe(pickerSnapshot)
                 val pickerTargetAdvise = if (taskGoal.time != null && pickerSnapshot.isPicker) {
@@ -2221,7 +2234,7 @@ class MainActivity : AppCompatActivity() {
                 val markNote = if (screenMarks.isEmpty()) ""
                     else "\n🎯 本轮截图已叠加蓝色数字角标（共${screenMarks.size}个）：角标=可点击/输入框元素的编号，与关键元素行首的[N]一一对应。" +
                         "要点击带角标的元素，Tap 坐标就是角标中心（即该元素中心）；编号绝不能当坐标输出；没有角标的元素仍按截图位置输出。"
-                val screenInfo = "$feedbackLine$appIdentityNote$markedDump$countdownNote$doneNote$cardNote$pickerNote$pickerTargetAdvise$goalNote$markNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
+                val screenInfo = "$feedbackLine$appIdentityNote$markedDump$countdownNote$doneNote$cardNote$trapNote$pickerNote$pickerTargetAdvise$goalNote$markNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
                     "\n坐标规则：Tap坐标只能来自截图目标中心；不要抄“关键元素”里的坐标。截图上明显存在但关键元素没列出的按钮，也必须按截图位置输出。" +
                     retryNote +
                     "$taskNote\n输出要求：先输出<think>一句话说明当前是什么页面、目标元素在哪、为什么选这个动作（120字以内）</think>，再输出一个动作。"
@@ -2702,6 +2715,31 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     navMismatchCount = 0
+                }
+                // 会话内外跳陷阱：点击前拦截「上次点击后跳出目标App」的同一入口（卡片挪位置时坐标守卫拦不住，靠文字兜底）
+                if (jumpTrapLabels.isNotEmpty() && recParsed?.first == "tap" && recParsed.second.isNotBlank()) {
+                    val tapNorm = TaskCardMemory.normalizeLabel(recParsed.second)
+                    val trapHit = jumpTrapLabels.firstOrNull { trap ->
+                        tapNorm.contains(trap) || trap.contains(tapNorm)
+                    }
+                    if (trapHit != null) {
+                        jumpBlockStreak++
+                        val blockedLabel = recParsed.second.take(40)
+                        runOnUiThread {
+                            adapter.add(ChatAdapter.Msg("system", "🛑 已拦截重复点击外跳入口「$blockedLabel」"))
+                            rv.scrollToPosition(adapter.items.size - 1)
+                        }
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "🛑 系统提示：「$blockedLabel」这个入口你刚才点过一次，点击后页面被拉出了目标应用，系统已拦截这次点击。" +
+                                    "绝不能再点它或同类广告/下载入口；请换与「$userText」直接相关的原生入口，找不到就 Back 或 Swipe。" +
+                                    (if (jumpBlockStreak >= 3) "已连续${jumpBlockStreak}次撞拦截，先输出 Back 离开当前页面。" else "")
+                            )
+                        })
+                        continue
+                    }
                 }
                 val res = AgentEngine.execAutoGLM(
                     this, answer, realW, realH, userText, screenDump, guessedApp
