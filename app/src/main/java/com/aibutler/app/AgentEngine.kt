@@ -558,6 +558,7 @@ object AgentEngine {
             "19.2 【禁用旧坐标】页面切换后的每一轮截图都是新页面：绝不能沿用上一轮的点击坐标。每次 Tap 前必须在当前截图上重新找到目标的新位置。\n" +
             "20. 【刷视频≠做任务】用户说「刷视频/看视频/刷一会儿/刷视频赚金币」，即使同时提到金币、赚钱，也一律优先进入应用的普通视频信息流，直接上下滑动观看即可；极速版类应用的观看奖励会在普通刷视频时自动累积，不需要进任务中心。用户明确说「看广告、看个广告、刷广告/广告视频、看激励广告、浏览广告领金币/拿积分」时路线完全相反：必须先点「赚钱/去赚钱/红包挂件」进入任务页，再点「看广告赚金币」类卡片，绝不能在普通视频流 Swipe 刷视频。普通刷视频时不要点击金币、红包、宝箱、签到、任务卡或赚钱入口；如果已经进入任务中心页，立即 Back 回视频流。\n" +
             "20.1 【开放任务永不停】用户说「刷视频/看视频/浏览/逛逛/刷内容」这类没有明确数量或时间目标的任务时：你绝对不能调用 finish，必须无限循环执行——Swipe 上滑一段视频 → Wait 2-3秒 → 继续 Swipe，一直重复。用户明确说「看广告、看个广告、刷广告/广告视频、看激励广告」时不适用本条，必须走任务中心的广告卡循环。唯一的停止方式是：① 用户点了「停止任务」气泡；② 系统达到最大轮次自动终止。每轮 Swipe 后都算继续干活，不要在 think 里写「已完成」。\n" +
+            "20.2 【点击前预判去向】每次 Tap 前不能只看按钮文字：必须看整个卡片的配图和周围文字，先预判点击后会到达什么页面。卡片带转盘/礼盒/红包雨等抽奖图，或周围有「投币」「报名」「必赚XX元」「金币暴涨」「下载APP」等字样时，点击后大概率进入活动页/下载页而不是任务正文——此时不要点，换与任务文字直接对应的入口。按钮写着「看广告」但周围全是抽奖/投币氛围的卡片，同样放弃。\n" +
             "21. 【入口找不到的系统排查】明确的赚钱/签到任务找不到目标入口时，按固定顺序排查，每个候选只尝试一次：① 底部导航各标签页，优先[我/我的]（赚钱/签到/钱包/金币类入口几乎总在这一页，钱包常在头像附近或右上角菜单里）；② 页面右上角悬挂图标（红包/金币/宝箱类挂件）；③ 首页活动弹窗里的活动入口。全部找不到就 finish 如实说明「该应用未找到目标入口及已尝试的位置」。普通刷视频任务不适用赚钱入口排查，应回到首页/视频流继续 Swipe。绝不重复尝试已确认无效的位置，绝不在视频流里乱点猜坐标。\n"
     }
 
@@ -911,6 +912,7 @@ object AgentEngine {
                     svc?.labelAtNormalized(p.first, p.second).orEmpty(),
                     correctedLabel
                 ).filter { it.isNotBlank() }.joinToString(" / ")
+                val cardContext = svc?.contextTextNear(p.first, p.second).orEmpty()
                 val targetAppMatched = allowedApp?.let { app ->
                     val normalizedLabel = app.first.replace(Regex("\\s+"), "")
                     val normalizedLabelAtPoint = nearbyLabel.replace(Regex("\\s+"), "")
@@ -995,6 +997,15 @@ object AgentEngine {
                     AglmResult(
                         "🛑 用户只要看广告，「${nearbyLabel.take(60)}」不是广告任务入口，已拦截。" +
                             "只允许点广告/继续观看/领取类按钮或任务中心入口，其他功能一律不要碰。",
+                        false,
+                        "__JUMP_BLOCK__"
+                    )
+                }
+                else if (PageGuard.isRiskyAdContext(userTask, cardContext)) {
+                    android.util.Log.i("AIButler", "Blocked risky ad-context tap: label=$nearbyLabel context=$cardContext")
+                    AglmResult(
+                        "🛑 「${nearbyLabel.take(60)}」周围图文显示这里通向投币/抽奖/下载/直播类页面，与看广告任务不符，已拦截。" +
+                            "请换与看广告直接对应的入口。",
                         false,
                         "__JUMP_BLOCK__"
                     )

@@ -1123,6 +1123,46 @@ class AssistantAccessibilityService : AccessibilityService() {
         return labels.joinToString(" / ").take(200)
     }
 
+    /**
+     * 收集某个0-999坐标周围卡片区域的全部文字/描述（含非点击文本）。
+     * 点击不能只看按钮文字：卡片标题、配图描述、小字说明才暴露入口的真实去向。
+     */
+    fun contextTextNear(nx: Int, ny: Int): String {
+        val root = rootInActiveWindow ?: return ""
+        val (screenWidth, screenHeight) = realScreenSize()
+        val px = ((nx.coerceIn(0, 999) / 999.0) * screenWidth).toInt()
+        val py = ((ny.coerceIn(0, 999) / 999.0) * screenHeight).toInt()
+        val zone = Rect(
+            px - (screenWidth * 0.22).toInt(),
+            py - (screenHeight * 0.07).toInt(),
+            px + (screenWidth * 0.22).toInt(),
+            py + (screenHeight * 0.07).toInt()
+        )
+        val texts = LinkedHashSet<String>()
+
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null || texts.size >= 24) return
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (!r.isEmpty && Rect.intersects(r, zone)) {
+                val t = sequenceOf(
+                    n.text?.toString()?.trim().orEmpty(),
+                    n.contentDescription?.toString()?.trim().orEmpty()
+                ).firstOrNull { it.isNotBlank() && it.length >= 2 }
+                if (t != null) texts.add(t.take(60))
+            }
+            for (i in 0 until n.childCount) {
+                try { walk(n.getChild(i)) } catch (_: Exception) { }
+            }
+        }
+
+        val roots = LinkedHashSet<AccessibilityNodeInfo>()
+        roots.add(root)
+        try { windows?.forEach { window -> window.root?.let { if (it.packageName == root.packageName) roots.add(it) } } } catch (_: Exception) { }
+        roots.forEach(::walk)
+        return texts.joinToString(" / ").take(300)
+    }
+
     /** 按最近一次读屏的编号点击（支持无文字的小图标） */
     fun clickNumber(num: Int): String {
         if (num < 1 || num > lastElements.size)

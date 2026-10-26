@@ -121,6 +121,15 @@ object PageGuard {
     }
 
     /**
+     * 点击点周围图文里的强落地页信号：按钮文字无辜（如「去观看」），但卡片标题/配图描述/
+     * 小字说明指向投币、抽奖、下载或直播页时，点击与看广告任务不符。
+     */
+    fun isRiskyAdContext(task: String, context: String): Boolean {
+        if (!TaskCompletionVerifier.isExplicitAdRewardTask(normalize(task))) return false
+        return Regex("投币|抽奖|下载|安装|直播").containsMatchIn(normalize(context))
+    }
+
+    /**
      * Task-center pages are meant to be left by passive video tasks. Require either a strong
      * title/entry or several reward features, so a coin badge in the normal feed is not enough.
      */

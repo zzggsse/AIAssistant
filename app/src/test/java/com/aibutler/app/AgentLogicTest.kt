@@ -693,6 +693,16 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_卡片语境暴露真实去向() {
+        val task = "去快手极速版看广告赚金币"
+        assertTrue(PageGuard.isRiskyAdContext(task, "立即投币报名 完整参与金币必暴涨"))
+        assertTrue(PageGuard.isRiskyAdContext(task, "幸运抽奖 转盘赢大奖"))
+        assertTrue(PageGuard.isRiskyAdContext(task, "下载APP领现金"))
+        assertFalse(PageGuard.isRiskyAdContext(task, "看广告得金币 立即观看"))
+        assertFalse(PageGuard.isRiskyAdContext("帮我签到领金币", "立即投币报名"))
+    }
+
+    @Test
     fun 刷视频赚金币_按普通视频流处理() {
         assertTrue(AgentEngine.isPassiveVideoTask("去抖音极速版刷视频赚金币"))
         assertTrue(AgentEngine.isPassiveVideoTask("看视频刷金币"))
