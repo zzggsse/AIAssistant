@@ -1525,6 +1525,7 @@ class MainActivity : AppCompatActivity() {
             var rewardCountdownStallRounds = 0
             var blockedRewardFinishRounds = 0
             var downloadWallExitRounds = 0
+            var rewardActivityExitRounds = 0
             var rewardCenterExitRounds = 0
             var adTaskFeedRounds = 0
             var retryNote = ""
@@ -2036,6 +2037,35 @@ class MainActivity : AppCompatActivity() {
                         addProperty(
                             "content",
                             "🛑 系统提示：刚才那页是下载/安装类广告墙，会往手机里装垃圾软件，已自动按返回离开。绝不要再点任何带「下载/安装/试玩/去体验」字样的卡片；只执行应用内直接的领取/签到/开宝箱动作。若刚点过的任务卡就是通向这类页面的入口，换其他入口。"
+                        )
+                    })
+                    Thread.sleep(1200)
+                    continue
+                }
+                // 🎰 投币/报名/抽奖活动页：会消耗或锁定金币，不是看广告路线，立即退出
+                if (PageGuard.isRewardTask(userText) && PageGuard.isRewardActivityPage(compactGuardDump)) {
+                    if (lastCardLabel.isNotBlank() && appPkg == lastCardPkg && round - lastCardRound <= 6) {
+                        TaskCardMemory.mark(this, appPkg, lastCardLabel, good = false)
+                    }
+                    lastCardLabel = ""
+                    AssistantAccessibilityService.instance?.pressBack()
+                    rewardActivityExitRounds++
+                    android.util.Log.i("AIButler", "AGLM reward-activity exit #$rewardActivityExitRounds: pkg=$appPkg")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "🎰 发现投币/抽奖类活动页，已自动返回（防止消耗金币）"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    if (rewardActivityExitRounds >= 3) {
+                        finalReply = "多次误入投币/抽奖类活动页，为防金币被消耗已停止。请手动关闭活动后重试。"
+                        android.util.Log.i("AIButler", "AGLM reward-activity exit breaker fired")
+                        break
+                    }
+                    ctx.add(JsonObject().apply {
+                        addProperty("role", "user")
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：刚才那页是投币/报名/抽奖类活动页，参与会消耗或锁定金币，已自动按返回离开。" +
+                                "用户要的是「$userText」，绝不要再点任何带「投币/报名/立即参与/抽奖」字样的入口；只执行看广告、领取、签到类动作。"
                         )
                     })
                     Thread.sleep(1200)

@@ -664,8 +664,19 @@ class AgentLogicTest {
     fun 页面防护_通用奖励卡只拦高风险语义() {
         assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "看直播领金币"))
         assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "下载APP得奖励"))
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "立即投币报名"))
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "立即参与"))
+        assertTrue(PageGuard.isUnsafeRewardTap("看广告刷金币", "幸运抽奖"))
         assertFalse(PageGuard.isUnsafeRewardTap("看广告刷金币", "观看广告领金币"))
         assertFalse(PageGuard.isUnsafeRewardTap("看直播领金币", "进入直播间"))
+    }
+
+    @Test
+    fun 页面防护_投币抽奖活动页识别() {
+        assertTrue(PageGuard.isRewardActivityPage("立即投币报名 完整参与金币必暴涨"))
+        assertTrue(PageGuard.isRewardActivityPage("立即参与 千万金币瓜分"))
+        assertFalse(PageGuard.isRewardActivityPage("立即投币"))
+        assertFalse(PageGuard.isRewardActivityPage("看广告得金币 立即观看"))
     }
 
     @Test

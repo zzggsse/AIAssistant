@@ -949,6 +949,12 @@ object AgentEngine {
                     android.util.Log.i("AIButler", "Blocked Tap in download wall: ${exitLabel ?: "无安全关闭控件"}")
                     return AglmResult(info, false, "__JUMP_BLOCK__")
                 }
+                // 🎰 奖励任务误入投币/抽奖活动页：可能消耗金币，立即退出（与主循环守卫对齐）
+                if (PageGuard.isRewardTask(userTask) && PageGuard.isRewardActivityPage(normalizedPage)) {
+                    val info = if (svc?.pressBack() == true) "已按返回退出投币/抽奖类活动页" else DeviceTools.NO_A11Y
+                    android.util.Log.i("AIButler", "Blocked Tap in reward activity page")
+                    return AglmResult(info, false, "__JUMP_BLOCK__")
+                }
                 // 🎬 误入拍摄/创作页：非创作任务里一旦走到发布就是高危动作，立即不保存退出
                 if (PageGuard.isUnintendedCreationPage(userTask, screenDump.orEmpty())) {
                     val discard = PageGuard.CREATION_DISCARD_LABELS.firstNotNullOfOrNull { lbl ->

@@ -92,8 +92,20 @@ object PageGuard {
         val text = normalize(label)
         return Regex(
             "直播|开播|主播|立即支付|去支付|确认支付|提交订单|确认订单|立即购买|立即抢购|" +
-                "加入购物车|进店|商品详情|下载|安装|试玩|去体验"
+                "加入购物车|进店|商品详情|下载|安装|试玩|去体验|" +
+                "投币|报名|立即参与|抽奖"
         ).containsMatchIn(text)
+    }
+
+    /**
+     * 奖励任务里的投币/报名/抽奖类活动页：会消耗或锁定金币，不是看广告路线。
+     * 必须同时出现「参与类动词」和「暴涨/翻倍/瓜分」类 hype 词，普通任务卡不误伤。
+     */
+    fun isRewardActivityPage(screenDump: String): Boolean {
+        val text = normalize(screenDump)
+        val commit = Regex("立即投币|投币报名|一键报名|立即报名|立即参与|去报名")
+        val hype = Regex("暴涨|翻倍|瓜分|大奖|必得|赢取|锦鲤|抽奖")
+        return commit.containsMatchIn(text) && hype.containsMatchIn(text)
     }
 
     /**
