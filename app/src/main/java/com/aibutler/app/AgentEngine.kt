@@ -990,6 +990,15 @@ object AgentEngine {
                         "__JUMP_BLOCK__"
                     )
                 }
+                else if (PageGuard.isOffMissionAdTap(userTask, nearbyLabel)) {
+                    android.util.Log.i("AIButler", "Blocked off-mission tap in explicit ad task: $nearbyLabel")
+                    AglmResult(
+                        "🛑 用户只要看广告，「${nearbyLabel.take(60)}」不是广告任务入口，已拦截。" +
+                            "只允许点广告/继续观看/领取类按钮或任务中心入口，其他功能一律不要碰。",
+                        false,
+                        "__JUMP_BLOCK__"
+                    )
+                }
                 else if (PageGuard.isForbiddenPayment(userTask, normalizedPage)) {
                     android.util.Log.i("AIButler", "Blocked Tap on payment/order page")
                     AglmResult(

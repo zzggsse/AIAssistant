@@ -2228,6 +2228,11 @@ class MainActivity : AppCompatActivity() {
                         "\n🚫 系统记忆：这些入口本任务内已实测会跳出目标应用，绝不能再点：${hits.joinToString("、")}。请换与任务直接相关的原生入口。"
                     else ""
                 } else ""
+                val adAnchorNote = if (TaskCompletionVerifier.isExplicitAdRewardTask(userText))
+                    "\n🎯 任务锚定：用户只要「看广告」。本轮只允许点：广告/视频广告/激励广告卡片、去赚钱或任务中心入口、" +
+                        "广告页里的继续观看/领取/关闭类按钮。签到、开宝箱、抽奖、投币、报名、参与、邀请、提现、兑换、逛逛等其他功能一律不是本任务，" +
+                        "绝不点击；看完广告按流程领取后回任务中心再来一轮。"
+                else ""
                 val pickerSnapshot = TaskGoalVerifier.PickerSnapshot.from(screenDump)
                 pickerTracker.observe(pickerSnapshot)
                 val pickerTargetAdvise = if (taskGoal.time != null && pickerSnapshot.isPicker) {
@@ -2264,7 +2269,7 @@ class MainActivity : AppCompatActivity() {
                 val markNote = if (screenMarks.isEmpty()) ""
                     else "\n🎯 本轮截图已叠加蓝色数字角标（共${screenMarks.size}个）：角标=可点击/输入框元素的编号，与关键元素行首的[N]一一对应。" +
                         "要点击带角标的元素，Tap 坐标就是角标中心（即该元素中心）；编号绝不能当坐标输出；没有角标的元素仍按截图位置输出。"
-                val screenInfo = "$feedbackLine$appIdentityNote$markedDump$countdownNote$doneNote$cardNote$trapNote$pickerNote$pickerTargetAdvise$goalNote$markNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
+                val screenInfo = "$feedbackLine$appIdentityNote$markedDump$countdownNote$doneNote$cardNote$trapNote$adAnchorNote$pickerNote$pickerTargetAdvise$goalNote$markNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
                     "\n坐标规则：Tap坐标只能来自截图目标中心；不要抄“关键元素”里的坐标。截图上明显存在但关键元素没列出的按钮，也必须按截图位置输出。" +
                     retryNote +
                     "$taskNote\n输出要求：先输出<think>一句话说明当前是什么页面、目标元素在哪、为什么选这个动作（120字以内）</think>，再输出一个动作。"

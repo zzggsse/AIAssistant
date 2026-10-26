@@ -680,6 +680,19 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_看广告任务锚定其他入口() {
+        val task = "去快手极速版看广告赚金币"
+        assertTrue(PageGuard.isOffMissionAdTap(task, "立即参与"))
+        assertTrue(PageGuard.isOffMissionAdTap(task, "立即投币报名 完整参与金币必暴涨"))
+        assertTrue(PageGuard.isOffMissionAdTap(task, "每日签到"))
+        assertTrue(PageGuard.isOffMissionAdTap(task, "开宝箱"))
+        assertFalse(PageGuard.isOffMissionAdTap(task, "看广告得金币"))
+        assertFalse(PageGuard.isOffMissionAdTap(task, "参与看广告赢金币"))
+        assertFalse(PageGuard.isOffMissionAdTap(task, "去赚钱"))
+        assertFalse(PageGuard.isOffMissionAdTap("帮我签到领金币", "每日签到"))
+    }
+
+    @Test
     fun 刷视频赚金币_按普通视频流处理() {
         assertTrue(AgentEngine.isPassiveVideoTask("去抖音极速版刷视频赚金币"))
         assertTrue(AgentEngine.isPassiveVideoTask("看视频刷金币"))

@@ -109,6 +109,18 @@ object PageGuard {
     }
 
     /**
+     * 任务锚定：用户点名「看广告」时，其余功能入口一律视为跑偏。
+     * 标签本身带广告语义（广告/激励/播放/继续观看）时不拦，兼容「参与看广告赢金币」类措辞。
+     */
+    fun isOffMissionAdTap(task: String, label: String): Boolean {
+        if (!TaskCompletionVerifier.isExplicitAdRewardTask(normalize(task))) return false
+        val text = normalize(label)
+        if (Regex("广告|激励|播放|继续观看|领取").containsMatchIn(text)) return false
+        return Regex("签到|宝箱|开宝箱|抽奖|投币|报名|参与|邀请|提现|兑换|逛逛|游戏|试玩")
+            .containsMatchIn(text)
+    }
+
+    /**
      * Task-center pages are meant to be left by passive video tasks. Require either a strong
      * title/entry or several reward features, so a coin badge in the normal feed is not enough.
      */
