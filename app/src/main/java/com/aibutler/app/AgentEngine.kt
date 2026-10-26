@@ -770,6 +770,11 @@ object AgentEngine {
     /** 协议坐标下，应用标题栏左上角返回箭头的通用区域。 */
     fun isTopLeftBackControlArea(x: Int, y: Int): Boolean = x in 0..140 && y in 0..170
 
+    /** 模型明确说要关闭遮挡层，而不是把关闭当成业务操作。 */
+    fun isDismissIntent(answer: String): Boolean = Regex(
+        "关闭(这个|该)?(弹窗|对话框|广告|浮层|遮罩)|(关闭按钮|X按钮|×按钮)|右上角.{0,12}(关闭|X|×)"
+    ).containsMatchIn(answer.replace(Regex("\\s+"), ""))
+
     /** 连续 Wait 卡死的纠正提示 */
     fun waitStallCorrectNote(count: Int): String =
         "⚠️ 系统提示：页面内容已连续 $count 轮完全相同，而你在持续 Wait。视频/进度大概率已结束，" +
@@ -971,6 +976,9 @@ object AgentEngine {
                     "立即抢购|立即购买|去支付|提交订单|确认订单|马上抢|单件包邮|拼单|加入购物车|购买数量|商品详情|已选.*规格",
                     RegexOption.IGNORE_CASE
                 ).containsMatchIn(normalizedPage)
+                val isExplicitDismiss =
+                    isDismissIntent(answer) &&
+                        PageGuard.isDismissControl(nearbyLabel, p.first, p.second)
                 val isNonShoppingTask = !Regex("下单|购买|支付|抢购|购物|买").containsMatchIn(userTask)
                 if (str("message") == "重要操作") AglmResult("⚠️ 敏感操作已跳过（涉及支付/隐私，请你手动处理）", false)
                 else if (isCommercePage && isNonShoppingTask) {
@@ -992,7 +1000,7 @@ object AgentEngine {
                         "__JUMP_BLOCK__"
                     )
                 }
-                else if (PageGuard.hasMissionVerbs(userTask) &&
+                else if (!isExplicitDismiss && PageGuard.hasMissionVerbs(userTask) &&
                     PageGuard.isOffMissionTap(userTask, nearbyLabel, cardContext)
                 ) {
                     android.util.Log.i(

@@ -717,6 +717,17 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_无目的地证据不拦截中性关闭控件() {
+        val adTask = "去快手极速版看广告赚金币"
+        assertFalse(PageGuard.isOffMissionTap(adTask, ""))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "   "))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "", " / / "))
+        assertTrue(AgentEngine.isDismissIntent("我需要先关闭这个弹窗，然后点击右上角的关闭按钮（X按钮）。"))
+        assertTrue(PageGuard.isDismissControl("", 908, 246))
+        assertFalse(PageGuard.isDismissControl("去微信邀请好友", 499, 609))
+    }
+
+    @Test
     fun 页面防护_奖励路由不被当前页面背景污染() {
         val pageNoise = "刚刚看过 / 暂停视频 / 同城 / 音乐转盘 / 拍摄 / 点赞 / 评论 / 分享"
         listOf("任务中心", "赚钱任务", "去赚钱", "去赚金币", "奖励中心", "收益中心", "钱包")

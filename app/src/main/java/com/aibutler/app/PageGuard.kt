@@ -168,7 +168,17 @@ object PageGuard {
     private fun specificVerbsIn(text: String): Set<String> = verbsIn(text) - connectorVerbs
 
     private fun specificContextVerbs(context: String): List<Set<String>> =
-        context.split(Regex(" / |\\s+")).map(::specificVerbsIn)
+        context.split(Regex(" / |\\s+"))
+            .map(::specificVerbsIn)
+            .filter { it.isNotEmpty() }
+
+    /** 通用关闭控件：语义文字优先，截图上的无文字 X 用右上角区域兜底。 */
+    fun isDismissControl(label: String, nx: Int, ny: Int): Boolean {
+        if (Regex("关闭|跳过|以后再说|我知道了|放弃奖励|残忍离开|[×✕]").containsMatchIn(normalize(label))) {
+            return true
+        }
+        return label.isBlank() && nx in 830..999 && ny in 30..650
+    }
 
     /**
      * 目标是否跑偏：按钮自带明确动作时按按钮判断；按钮中性时才看卡片语境。
@@ -180,14 +190,16 @@ object PageGuard {
         if (taskVerbs.isEmpty() && !taskHasReward) return false
         if (isRewardRouteTap(task, label)) return false
 
-        val labelVerbs = specificVerbsIn(label)
+        val labelVerbs = verbsIn(label)
         if (labelVerbs.isNotEmpty()) {
             if (labelVerbs.intersect(taskVerbs).isEmpty()) return true
+            if (context.isBlank()) return false
             return specificContextVerbs(context)
                 .any { it.isNotEmpty() && it.intersect(taskVerbs).isEmpty() }
         }
 
         val segmentVerbs = specificContextVerbs(context)
+        if (segmentVerbs.isEmpty()) return false
         val alignedSegments = segmentVerbs.filter { it.intersect(taskVerbs).isNotEmpty() }
         val conflictingSegments = segmentVerbs.filter { it.isNotEmpty() && it.intersect(taskVerbs).isEmpty() }
         if (alignedSegments.isNotEmpty() && conflictingSegments.isEmpty()) return false
