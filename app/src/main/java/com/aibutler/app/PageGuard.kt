@@ -28,8 +28,12 @@ object PageGuard {
     private val rewardCloseText = Regex(
         "关闭|跳过|以后再说|暂不|下次再说|放弃奖励|放弃观看|放弃本次奖励|不再观看|不感兴趣|坚持退出|残忍离开|残忍拒绝|退出广告"
     )
+    private val rewardStrongCloseText = Regex(
+        "坚持退出|残忍离开|残忍拒绝|退出广告|放弃奖励|放弃观看|放弃本次奖励|不再观看"
+    )
     private val rewardAdTransform = Regex(
-        "点击并浏览|浏览\\s*\\d+|继续观看|额外得|立即下载|去下载|安装|试玩|抢购|了解详情|查看详情|了解更多|去完成|去体验"
+        "点击并浏览|浏览\\s*\\d+|继续观看|额外得|再看一[个轮集次]|再[领得].{0,8}(?:金币|奖励)|" +
+            "立即下载|去下载|安装|试玩|抢购|了解详情|查看详情|了解更多|去完成|去体验"
     )
 
     fun isRewardTask(task: String): Boolean {
@@ -68,6 +72,27 @@ object PageGuard {
     fun isUnintendedLiveRoom(task: String, screenDump: String): Boolean =
         isLiveRoom(screenDump) && !isLiveIntentTask(task)
 
+    /**
+     * 激励广告里嵌入的直播引流可能同时命中“继续观看”和直播间特征。
+     * 刚强退直播间后又自动恢复观看，会形成两个兜底互相抵消的循环；
+     * 这个短窗口内优先让冲突层退出，而不是继续恢复播放。
+     */
+    fun isRecentLiveExit(lastLiveExitRound: Int?, round: Int): Boolean =
+        lastLiveExitRound != null && round - lastLiveExitRound in 1..3
+
+    /** 福利/广告入口刚触发后，广告素材本身可能是一段直播内容；这不等同于误入直播间。 */
+    fun hasRewardAdEntry(screenDump: String): Boolean = Regex(
+        "领福利|领金币|看广告得|刷广告|看视频赚|观看广告|广告任务|继续观看"
+    ).containsMatchIn(normalize(screenDump))
+
+    fun isRecentRewardEntry(lastRewardEntryRound: Int?, round: Int): Boolean =
+        lastRewardEntryRound != null && round - lastRewardEntryRound in 1..5
+
+    /** 只有显式退出控件才能打断广告素材里的直播内容；结构角标可能是广告关闭/全屏按钮。 */
+    fun hasExplicitLiveExit(screenDump: String): Boolean = Regex(
+        "退出直播间|离开直播间|退出直播|关闭直播|结束观看"
+    ).containsMatchIn(normalize(screenDump))
+
     /** Best visible, explicit leave control; system Back is only a fallback. */
     fun liveRoomExitLabel(screenDump: String): String? {
         val text = normalize(screenDump)
@@ -75,15 +100,20 @@ object PageGuard {
         if (explicit != null) return explicit
 
         val labels = clickableLabels(screenDump)
-        return labels.firstOrNull { label ->
+        val explicitLabel = labels.firstOrNull { label ->
             Regex("退出直播间|离开直播间|退出直播|关闭直播|残忍离开|放弃观看|结束观看")
                 .containsMatchIn(label)
-        } ?: clickableRows(screenDump)
+        }?.let(::queryFor)
+        if (explicitLabel != null) return explicitLabel
+
+        return clickableRows(screenDump)
             .filter { (label, x, y) ->
-                (label == "无文字元素" || rewardCloseGlyph.containsMatchIn(label)) &&
+                val cleanLabel = queryFor(label)
+                (cleanLabel == "无文字元素" || rewardCloseGlyph.containsMatchIn(cleanLabel)) &&
                     x >= 820 && y <= 160
             }
-            .maxByOrNull { it.second }?.first
+            .maxByOrNull { it.second }
+            ?.let { queryFor(it.first) }
     }
 
     fun isPaymentOrOrderPage(screenDump: String): Boolean {
@@ -118,6 +148,26 @@ object PageGuard {
                 plain.substring(start, match.range.first).contains(Regex("不是|不要|不能|无需|禁止|避免"))
             }
         }
+    }
+
+    /**
+     * 账号登录和凭据填写是用户本人才能完成的授权动作。这里只认页面上明确的
+     * 登录方式/凭据语义，避免把“我的”“设置”等普通页面里的历史登录状态误判成登录墙。
+     */
+    fun isManualAuthPage(screenDump: String): Boolean {
+        val text = normalize(screenDump)
+        val explicitAuthPage = Regex(
+            "扫码登录|二维码登录|账号登录|手机号登录|短信登录|验证码登录|" +
+                "微信登录|QQ登录|apple登录|忘记密码|登录/注册|注册/登录|" +
+                "(?i)scan.{0,6}qr.{0,6}login|account.?login|mobile.?login|forgot.{0,6}password",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(text)
+        if (explicitAuthPage) return true
+
+        val stateRemoved = Regex("已登录|登录成功|退出登录|账号与安全").replace(text, "")
+        val authAction = Regex("登录|注册|log\\s*in|sign\\s*in", RegexOption.IGNORE_CASE)
+        val credential = Regex("密码|验证码|手机号|账号|password|verification|otp", RegexOption.IGNORE_CASE)
+        return authAction.containsMatchIn(stateRemoved) && credential.containsMatchIn(stateRemoved)
     }
 
     /** Button labels that require the user's manual confirmation, regardless of task wording. */
@@ -225,6 +275,27 @@ object PageGuard {
     }
 
     /**
+     * 投币/抽奖类活动层的安全退出控件。真机上不少奖励弹窗不响应 Back，
+     * 只认角上的关闭角标，所以退出顺序必须是：可见文字关闭按钮 → 图形 X，
+     * 两者都没有时由调用方按 Back 兜底。图形 X 取最靠上、其次最靠右的一个：
+     * 活动弹窗的关闭角标几乎总在弹窗右上区域。
+     */
+    fun rewardActivityExitControl(screenDump: String): RewardCompletionExit? {
+        ExitMemory.visibleButtons(screenDump)
+            .firstOrNull { it.score in 300..499 }
+            ?.let { return RewardCompletionExit("活动层退出", it.label) }
+        return clickableRows(screenDump)
+            .filter { (label, _, _) ->
+                val text = normalize(label)
+                text == "无文字元素" || rewardCloseGlyph.containsMatchIn(text)
+            }
+            .minWithOrNull(compareBy({ it.third }, { -it.second }))
+            ?.let { row ->
+                RewardCompletionExit("活动层退出", queryFor(row.first), row.second, row.third)
+            }
+    }
+
+    /**
      * 任务动词表：用户任务点名了哪些动作，就锚定哪些动作。
      * 目标（按钮文字或周围图文）命中的动作与任务命名的动作完全不同 → 跑偏，拦截。
      * 数据驱动：换任务、换App都按同一张表判断，不写死任何单一场景。
@@ -263,11 +334,29 @@ object PageGuard {
     private val connectorVerbs = setOf("参与")
     private val rewardOutcome = Regex("金币|现金|积分|奖励|赚钱|收益|佣金")
     private val rewardTaskRoute = Regex(
-        "任务中心|任务列表|赚钱任务|奖励中心|收益中心|去赚钱|去赚金币|做任务|领任务|钱包|金币收益|现金收益"
+        "任务中心|任务列表|赚钱任务|奖励中心|收益中心|去赚钱|去赚金币|做任务|领任务|钱包|金币收益|现金收益|视频任务"
+    )
+
+    private val timedRewardAdEntry = Regex(
+        "点击(?:并)?(?:看|观看|浏览)|看\\s*\\d+\\s*(?:秒|分钟)|浏览\\s*\\d+\\s*(?:秒|分钟)"
     )
 
     private fun isRewardRouteTap(task: String, label: String): Boolean =
         isRewardTask(task) && rewardTaskRoute.containsMatchIn(normalize(label))
+
+    /**
+     * 限时奖励广告常用「点击看5秒」这类动作型文案，本身不含「广告」关键词。
+     * 它们是奖励任务的直接入口；只有中性容器交给语境做二次确认，避免误伤整页广告卡。
+     */
+    private fun isTimedRewardAdTap(label: String, context: String): Boolean {
+        val target = normalize(label)
+        val nearby = normalize(context)
+        if (timedRewardAdEntry.containsMatchIn(target)) return true
+        val isNeutralTarget = target.isBlank() || target == "无文字元素" ||
+            Regex("action_bar_view|去领取|去完成|领福利").containsMatchIn(target)
+        return isNeutralTarget && timedRewardAdEntry.containsMatchIn(nearby) &&
+            rewardOutcome.containsMatchIn(nearby)
+    }
 
     private fun specificVerbsIn(text: String): Set<String> = verbsIn(text) - connectorVerbs
 
@@ -278,6 +367,18 @@ object PageGuard {
 
 
     /** 通用关闭控件：语义文字优先，截图上的无文字 X 用右上角区域兜底。 */
+    /**
+     * 底部导航经常把文字包在无文字容器外层，读屏只能给出空白容器。
+     * 这类坐标属于应用内常规导航，不能被任务锚定当成“无目的地跳转”。
+     */
+    fun isNeutralBottomNavigation(label: String, ny: Int): Boolean {
+        val text = normalize(label)
+        val isUnlabeledContainer = text.isBlank() ||
+            text.startsWith("无文字元素") ||
+            text.startsWith("{")
+        return isUnlabeledContainer && ny in 850..999
+    }
+
     fun isDismissControl(label: String, nx: Int, ny: Int): Boolean {
         val text = normalize(label)
         // 语义词只认短标签（≤6字）。「关闭广告并领取奖励」这类长文案是转化按钮，不能因含「关闭」放行（体检 P2-8）
@@ -302,7 +403,8 @@ object PageGuard {
         // 任务只点了奖励结果、没点名玩法（taskVerbs 为空）时不做动词锚定：
         // 那类任务交给 isUnsafeRewardTap/isSpendActionTap 的通用红线，否则任何动词入口都被一刀切拦掉（体检 P2-1）
         if (taskVerbs.isEmpty()) return false
-        if (isRewardRouteTap(task, label)) return false
+        if (isRewardRouteTap(task, label) || isRewardRouteTap(task, context)) return false
+        if (isRewardTask(task) && isTimedRewardAdTap(label, context)) return false
 
         val labelVerbs = verbsIn(label)
         if (labelVerbs.isNotEmpty()) {
@@ -313,8 +415,8 @@ object PageGuard {
                 val segments = specificContextVerbs(context).filter { it.isNotEmpty() }
                 if (segments.isEmpty()) return false
                 val aligned = segments.filter { it.intersect(taskVerbs).isNotEmpty() }
-                // 标签本身与任务对齐时：语境全是其他玩法 → 拦；有对齐也有冲突（奖励卡常见的
-                // 「邀请好友再得XX」混杂副标）→ 放行，连坐误拦是 v1.11.x 反复返工的主因（体检 P2-7）
+                // 标签本身与任务对齐时：只要有明确对齐去向就放行；全是其他玩法才拦。
+                // 奖励页常见「播放视频 / 短剧 / 直播」混排，不能因背景连坐误拦。
                 return aligned.isEmpty()
             }
             // 标签只有连接动词（「立即参与/去参加」）：任务点名了参与类动作（「参加抽奖」）时
@@ -326,9 +428,8 @@ object PageGuard {
         val segmentVerbs = specificContextVerbs(context)
         if (segmentVerbs.isEmpty()) return false
         val alignedSegments = segmentVerbs.filter { it.intersect(taskVerbs).isNotEmpty() }
-        val conflictingSegments = segmentVerbs.filter { it.isNotEmpty() && it.intersect(taskVerbs).isEmpty() }
-        if (alignedSegments.isNotEmpty() && conflictingSegments.isEmpty()) return false
-        return alignedSegments.isEmpty() || conflictingSegments.isNotEmpty()
+        // 中性按钮周围常见混排内容。只要有明确对齐去向就放行；完全没有对齐去向才视为跑偏。
+        return alignedSegments.isEmpty()
     }
 
     /**
@@ -446,6 +547,14 @@ object PageGuard {
         if (!hasRewardCompletion(screenDump)) return null
         val evidence = rewardCompletionEvidence.find(normalize(screenDump))?.value.orEmpty()
         val rows = clickableRows(screenDump)
+        // 结算后的挽留弹窗常把转化按钮放在结果提示很远处。强语义退出优先于几何兜底，
+        // 因为它比“关闭”更不容易误中页面里另一条无关 banner。
+        rows.firstOrNull { (label, _, _) ->
+            val text = normalize(label)
+            rewardStrongCloseText.containsMatchIn(text) && !rewardAdTransform.containsMatchIn(text)
+        }?.let { row ->
+            return RewardCompletionExit(evidence, queryFor(row.first))
+        }
         val anchors = rows.filter { (label, _, _) ->
             rewardCompletionEvidence.containsMatchIn(normalize(label))
         }

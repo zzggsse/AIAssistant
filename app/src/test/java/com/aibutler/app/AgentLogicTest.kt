@@ -241,6 +241,14 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 安全守卫_登录墙必须交给用户手动处理() {
+        assertTrue(PageGuard.isManualAuthPage("当前应用: 微信\n账号登录\n输入密码\n忘记密码"))
+        assertTrue(PageGuard.isManualAuthPage("请输入手机号和验证码\n登录/注册"))
+        assertFalse(PageGuard.isManualAuthPage("我的淘宝\n已登录账号\n待收货\n设置"))
+        assertFalse(PageGuard.isManualAuthPage("搜索结果\n保温杯\n加入购物车"))
+    }
+
+    @Test
     fun 闹钟工具明确会打开时钟应用() {
         val tools = AgentEngine.toolsJson()
         val alarm = tools.map { it.asJsonObject }
@@ -349,6 +357,34 @@ class AgentLogicTest {
             dump
         )
         assertEquals(TaskGoalVerifier.Status.NEEDS_EVIDENCE, result.status)
+    }
+
+    // ========== 数量目标：动作次数不认屏幕字样（真机假完成修复） ==========
+
+    @Test
+    fun 目标校验_动作数量不把屏幕字样当完成证据() {
+        val goal = TaskGoalVerifier.parse("去快手极速版看3个广告刷金币")
+        assertEquals("3", goal.quantity?.value)
+        assertTrue(goal.quantity?.isActionCount == true)
+        // 系统提示"检测到3个可滑动区域"曾是假完成证据来源：零广告也被判完成
+        val dump = "当前屏幕检测到3个可滑动区域 页面内容: 任务中心 去赚钱"
+        assertEquals(TaskGoalVerifier.Status.NEEDS_EVIDENCE, TaskGoalVerifier.check(goal, dump).status)
+    }
+
+    @Test
+    fun 目标校验_非动作数量仍按屏幕显示值确认() {
+        val goal = TaskGoalVerifier.parse("帮我要3杯奶茶")
+        assertEquals("3", goal.quantity?.value)
+        assertFalse(goal.quantity?.isActionCount == true)
+        val dump = "页面内容: 购物车 3杯 可点击: 去结算"
+        assertEquals(TaskGoalVerifier.Status.CONFIRMED, TaskGoalVerifier.check(goal, dump).status)
+    }
+
+    @Test
+    fun 目标提取_动作数量目标支持数字和中文() {
+        assertEquals(3, TaskGoalVerifier.actionQuantityTarget("去快手极速版看3个广告刷金币", Regex("广告|激励|视频")))
+        assertEquals(1, TaskGoalVerifier.actionQuantityTarget("看一个广告", Regex("广告|激励|视频")))
+        assertEquals(null, TaskGoalVerifier.actionQuantityTarget("看广告赚金币", Regex("广告|激励|视频")))
     }
 
     // ========== 历史压缩（体检第六轮 P3-3） ==========
@@ -818,7 +854,7 @@ class AgentLogicTest {
 
         val liveDump = "当前应用: com.any.app\n" +
             "页面内容: 关注 2917观看 更多直播 说点什么\n" +
-            "可点击: 无文字元素 [936,75]\n" +
+            "可点击: 无文字元素 {live_close,ImageView} [936,75]\n" +
             "可点击: 说点什么... [240,850]\n" +
             "可点击: 底部栏礼物面板按钮 [699,912]"
 
@@ -835,6 +871,30 @@ class AgentLogicTest {
         assertFalse(PageGuard.isRewardActivityPage("立即参与 千万金币瓜分", "参与抽奖赢金币"))
         assertFalse(PageGuard.isRewardActivityPage("立即投币"))
         assertFalse(PageGuard.isRewardActivityPage("看广告得金币 立即观看"))
+    }
+
+    @Test
+    fun 页面防护_活动层退出控件优先文字按钮其次图形X() {
+        val textDump = "当前应用: com.any.app\n" +
+            "页面内容: 瓜分百亿金币 今日投币 立即参与\n" +
+            "可点击: 取消 [500,620]\n" +
+            "可点击: × [905,190]"
+        val textExit = PageGuard.rewardActivityExitControl(textDump)
+        assertEquals("取消", textExit?.closeLabel)
+        assertFalse(PageGuard.isGlyphCloseQuery(textExit?.closeLabel))
+
+        // 没有文字关闭按钮时取最靠上的关闭角标/无名元素（真机弹窗 X 常不响应 Back）
+        val glyphDump = "当前应用: com.any.app\n" +
+            "页面内容: 瓜分百亿金币 今日投币 立即参与\n" +
+            "可点击: × [880,420]\n" +
+            "可点击: 无文字元素 [905,190]"
+        val glyphExit = PageGuard.rewardActivityExitControl(glyphDump)
+        assertEquals("无文字元素", glyphExit?.closeLabel)
+        assertEquals(905, glyphExit?.x)
+        assertEquals(190, glyphExit?.y)
+        assertTrue(PageGuard.isGlyphCloseQuery(glyphExit?.closeLabel))
+
+        assertNull(PageGuard.rewardActivityExitControl("当前应用: com.any.app\n页面内容: 立即参与 千万金币瓜分"))
     }
 
     @Test
@@ -893,6 +953,43 @@ class AgentLogicTest {
             }
         assertTrue(PageGuard.isOffMissionTap("看广告赚金币", "看直播领金币", pageNoise))
         assertTrue(PageGuard.isOffMissionTap("看广告赚金币", "去观看", "幸运抽奖 转盘赢大奖"))
+    }
+
+    @Test
+    fun 页面防护_任务页混排入口不因背景连坐拦截() {
+        val adTask = "去抖音极速版看广告刷金币"
+        assertFalse(
+            PageGuard.isOffMissionTap(
+                adTask,
+                "播放视频，按钮 / 短剧，按钮 / 热点，按钮 / 直播，按钮",
+                "短剧 / 热点 / 直播 / 看广告赚金币"
+            )
+        )
+        assertFalse(
+            PageGuard.isOffMissionTap(
+                adTask,
+                "无文字元素",
+                "看20秒指定视频任务 / 单日最高可赚金币"
+            )
+        )
+        assertTrue(PageGuard.isOffMissionTap(adTask, "无文字元素", "幸运抽奖 / 邀请好友得现金"))
+    }
+
+    @Test
+    fun 页面防护_限时奖励广告入口按任务目的地放行() {
+        val adTask = "去快手极速版看3个广告刷金币"
+        assertFalse(PageGuard.isOffMissionTap(adTask, "点击看5秒"))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "action_bar_view", "点击看5秒 领1456金币"))
+        assertFalse(PageGuard.isOffMissionTap(adTask, "去完成", "点击并浏览 15 秒 额外得 330 金币"))
+        assertTrue(PageGuard.isOffMissionTap(adTask, "去观看", "下载APP领现金"))
+    }
+
+    @Test
+    fun 页面防护_底部无文字导航容器不算偏离任务() {
+        assertTrue(PageGuard.isNeutralBottomNavigation("无文字元素 {kdu,FrameLayout}", 912))
+        assertTrue(PageGuard.isNeutralBottomNavigation("", 905))
+        assertFalse(PageGuard.isNeutralBottomNavigation("无文字元素 {kdu,FrameLayout}", 500))
+        assertFalse(PageGuard.isNeutralBottomNavigation("看直播领金币", 912))
     }
 
     @Test
@@ -1058,6 +1155,21 @@ class AgentLogicTest {
 
         assertTrue(PageGuard.hasRewardCompletion(dump))
         assertNull(PageGuard.rewardCompletionExit(dump)?.closeLabel)
+    }
+
+    @Test
+    fun 奖励完成层_挽留按钮不能当退出且优先坚持退出() {
+        val withSafeExit = "当前应用: com.any.reward.app\n" +
+            "页面内容: 已成功领取奖励 广告\n" +
+            "可点击: 坚持退出 {,TextView} [355,430]\n" +
+            "可点击: 再看一个再领500金币 {,Button} [499,690]"
+        assertEquals("坚持退出", PageGuard.rewardCompletionExit(withSafeExit)?.closeLabel)
+
+        val withoutSafeExit = "当前应用: com.any.reward.app\n" +
+            "页面内容: 已成功领取奖励 广告\n" +
+            "可点击: 再看一个再领500金币 {,Button} [499,690]"
+        assertTrue(PageGuard.hasRewardCompletion(withoutSafeExit))
+        assertNull(PageGuard.rewardCompletionExit(withoutSafeExit)?.closeLabel)
     }
 
     @Test
@@ -1547,5 +1659,36 @@ class AgentLogicTest {
         val actions = AgentEngine.parseAutoGlmActions(batch)
         assertEquals(2, actions.size)
         assertEquals("do(action=\"Type\", text=\"说do(x\")", actions[0])
+    }
+
+    @Test
+    fun 经验评审_只认机器可读结论() {
+        assertTrue(TaskOutcomeJudge.parse("""{"SUCCESS":true}""") == true)
+        assertTrue(TaskOutcomeJudge.parse("""{"SUCCESS": false, "reason": "页面没有保存成功"}""") == false)
+        // 模型附带解释里出现“失败”不能覆盖 SUCCESS=true；字段冲突时不能污染经验库
+        assertNull(TaskOutcomeJudge.parse("我判断任务失败，但忘了输出 SUCCESS 字段"))
+        assertNull(TaskOutcomeJudge.parse("""{"SUCCESS":"unknown"}"""))
+    }
+
+    @Test
+    fun 直播间与继续观看冲突_短窗口内不再自动恢复() {
+        // 刚强退直播间（第10轮）后，1-3轮内出现“继续观看”不能马上送回去；
+        // 超过短窗口则是正常的新激励广告，可以恢复。
+        assertTrue(PageGuard.isRecentLiveExit(10, 11))
+        assertTrue(PageGuard.isRecentLiveExit(10, 13))
+        assertFalse(PageGuard.isRecentLiveExit(10, 14))
+        assertFalse(PageGuard.isRecentLiveExit(null, 11))
+    }
+
+    @Test
+    fun 广告入口后的直播画面_优先当广告播放() {
+        val entry = "页面内容: 任务中心 领福利 看广告得金币"
+        val liveAd = "页面内容: 直播中 说点什么 送礼物"
+        assertTrue(PageGuard.hasRewardAdEntry(entry))
+        assertTrue(PageGuard.isRecentRewardEntry(4, 8))
+        assertFalse(PageGuard.isRecentRewardEntry(4, 10))
+        assertTrue(PageGuard.hasExplicitLiveExit("页面内容: 退出直播间"))
+        // 没有显式退出控件时不能按结构角标强退，否则会作废激励广告进度
+        assertFalse(PageGuard.hasExplicitLiveExit(liveAd))
     }
 }

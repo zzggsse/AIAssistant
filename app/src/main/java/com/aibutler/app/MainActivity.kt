@@ -743,12 +743,10 @@ class MainActivity : AppCompatActivity() {
                         "AIButler",
                         "NATIVE alarm direct: ${directAlarm.hour}:${directAlarm.minute} label=${directAlarm.label}"
                     )
-                    // 与所有其他任务共用同一条“先进入真实目标应用”的通用启动链路。
-                    launchTargetAppForTask(userText, contextUserText)
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg(
                             "system",
-                            "⏰ 正在设置 %02d:%02d 的闹钟并打开时钟应用…".format(
+                            "⏰ 正在设置 %02d:%02d 的闹钟…".format(
                                 directAlarm.hour,
                                 directAlarm.minute
                             )
@@ -959,7 +957,7 @@ class MainActivity : AppCompatActivity() {
                         saveAgentExperience(
                             userText,
                             reply,
-                            requireSuccessConfirmation = plan?.taskType == "screen_task"
+                            requireOutcomeJudgement = plan?.taskType == "screen_task"
                         )
                         runOnUiThread {
                             adapter.add(ChatAdapter.Msg("assistant", reply))
@@ -1532,6 +1530,12 @@ class MainActivity : AppCompatActivity() {
             var downloadWallExitRounds = 0
             var rewardActivityExitRounds = 0
             var rewardLayerExitRounds = 0
+            var adRewardCompletions = 0              // 机械计数：已退出几次奖励结算层（数量型广告任务的 finish 证据）
+            var lastRewardEntryRound: Int? = null
+            var rewardLiveEmbedRounds = 0
+            var lastLiveExitRound: Int? = null
+            var liveResumeConflictRounds = 0
+            var liveResumeRecoveries = 0
             var lastRoundHadRewardCompletion = false   // 完成证据新鲜度：只在证据新出现时才当作结算层（体检追加轮 P1-8）
             var adLoopFinishRejects = 0                // 循环型广告任务 finish 拒绝次数：防无终止信号时无限烧轮次（体检 P2-2）
             var rewardCenterExitRounds = 0
@@ -1556,8 +1560,8 @@ class MainActivity : AppCompatActivity() {
                     }
                     val replayResult = PathMemoryStore.tryReplay(this, matchedPath) { cancelRequested }
                     if (replayResult.success) {
-                        val replayConfirmed = AssistantAccessibilityService.instance
-                            ?.showSuccessConfirmation(userText, "缓存路径回放成功（${replayResult.stepsExecuted}步）") == TaskVerdict.CONFIRMED
+                        // 回放本身就是逐步核对过的机械结果；这里不再让用户补一道人工判定。
+                        val replayConfirmed = replayResult.success
                         if (replayConfirmed) {
                             PathMemoryStore.markSuccess(this, matchedPath)
                         }
@@ -1806,22 +1810,82 @@ class MainActivity : AppCompatActivity() {
                     break
                 }
                 val compactGuardDump = screenDump.replace(Regex("\\s+"), "")
+                val quantifiedAdTarget = if (TaskCompletionVerifier.hasQuantityConstraint(userText) &&
+                    TaskCompletionVerifier.isExplicitAdRewardTask(userText)
+                ) {
+                    TaskGoalVerifier.actionQuantityTarget(userText, Regex("广告|激励|视频"))
+                } else null
+                if (quantifiedAdTarget != null && quantifiedAdTarget > 0 &&
+                    adRewardCompletions >= quantifiedAdTarget
+                ) {
+                    android.util.Log.i(
+                        "AIButler",
+                        "AGLM quantified-ad target reached: $adRewardCompletions/$quantifiedAdTarget"
+                    )
+                    finalReply = "✅ 已完成：系统确认看完了 ${quantifiedAdTarget} 个广告的领取结算。"
+                    break
+                }
+                if (PageGuard.isManualAuthPage(compactGuardDump)) {
+                    android.util.Log.i("AIButler", "AGLM manual auth page detected, stopping")
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg(
+                            "system",
+                            "🛑 当前页面需要登录或输入账号凭据。出于安全考虑，已停止并交还给您手动处理。"
+                        ))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    finalReply = "任务已停止：需要您先手动登录或完成账号验证；完成后可以再说「继续」。"
+                    break
+                }
                 // 倒计时读数提前到页面级守卫之前：激励广告倒计时活跃时，直播间/下载墙/活动页守卫都要让路，
                 // 否则广告素材自带的直播引流/下载条/抽奖文案会触发强退、作废已看时长（体检 P2-4/P1-1）
                 val passiveVideoTask = AgentEngine.isPassiveVideoTask(userText)
+                if (!passiveVideoTask && PageGuard.isRewardTask(userText) &&
+                    PageGuard.hasRewardAdEntry(compactGuardDump)
+                ) {
+                    lastRewardEntryRound = round
+                    rewardLiveEmbedRounds = 0
+                }
                 val rewardCountdownSeconds = if (passiveVideoTask) {
                     null
                 } else {
                     AgentEngine.rewardCountdownSeconds(compactGuardDump)
                 }
+                val rewardAdLiveEmbed = !passiveVideoTask &&
+                    PageGuard.isRecentRewardEntry(lastRewardEntryRound, round) &&
+                    !PageGuard.hasExplicitLiveExit(compactGuardDump) &&
+                    rewardLiveEmbedRounds < 3
+                if (rewardCountdownSeconds == null && rewardAdLiveEmbed &&
+                    !PageGuard.hasRewardCompletion(compactGuardDump) &&
+                    PageGuard.isUnintendedLiveRoom(userText, compactGuardDump)
+                ) {
+                    rewardLiveEmbedRounds++
+                    // 同一支广告素材可能在第5轮后才展开直播画面；播放等待期间刷新入口窗口，
+                    // 避免窗口刚好过期后被直播间守卫误退。总轮数上限仍防止无限等待。
+                    lastRewardEntryRound = round
+                    android.util.Log.i(
+                        "AIButler",
+                        "AGLM reward ad contains live content, waiting #$rewardLiveEmbedRounds"
+                    )
+                    // 激励广告常用 30-60 秒直播素材；这里给到 12 轮，避免刚好在领奖前熔断。
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", "⏳ 激励广告素材包含直播内容，先等待播放完成，不强退。"))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    Thread.sleep(5000)
+                    continue
+                }
                 if (rewardCountdownSeconds == null && PageGuard.isUnintendedLiveRoom(userText, compactGuardDump)) {
                     val exitLabel = PageGuard.liveRoomExitLabel(screenDump)
+                    val clickResult = exitLabel?.let {
+                        AssistantAccessibilityService.instance?.clickText(it)
+                    }
                     val exited = when {
-                        exitLabel != null ->
-                            AssistantAccessibilityService.instance?.clickText(exitLabel)?.startsWith("已") == true
+                        clickResult?.startsWith("已") == true -> true
                         else -> AssistantAccessibilityService.instance?.pressBack() == true
                     }
                     android.util.Log.i("AIButler", "AGLM force exit live room, label=$exitLabel, exited=$exited")
+                    lastLiveExitRound = round
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg("system", "🎯 识别到误入直播间，已优先点击明确的离开控件/返回。"))
                         rv.scrollToPosition(adapter.items.size - 1)
@@ -1990,6 +2054,53 @@ class MainActivity : AppCompatActivity() {
                 // 不能把无文字/低对比弹窗交给视觉模型去猜坐标。
                 val rewardContinueLabel = PageGuard.rewardContinueLabel(screenDump, rewardCountdownSeconds)
                 if (!passiveVideoTask && rewardContinueLabel != null && PageGuard.isRewardTask(userText)) {
+                    if (PageGuard.isRecentLiveExit(lastLiveExitRound, round)) {
+                        liveResumeConflictRounds++
+                        android.util.Log.i(
+                            "AIButler",
+                            "AGLM live/reward guard conflict #$liveResumeConflictRounds, suppress resume"
+                        )
+                        if (liveResumeConflictRounds == 1 && liveResumeRecoveries < 1) {
+                            liveResumeRecoveries++
+                            val resumeResult =
+                                AssistantAccessibilityService.instance?.clickText(rewardContinueLabel)
+                            if (resumeResult?.startsWith("已") == true) {
+                                lastLiveExitRound = null
+                                liveResumeConflictRounds = 0
+                                rewardLiveEmbedRounds = 0
+                                android.util.Log.i(
+                                    "AIButler",
+                                    "AGLM live/reward one-shot resume via $rewardContinueLabel"
+                                )
+                                runOnUiThread {
+                                    adapter.add(
+                                        ChatAdapter.Msg(
+                                            "system",
+                                            "▶️ 检测到刚误退了仍在倒计时的激励广告，已恢复一次观看进度。"
+                                        )
+                                    )
+                                    rv.scrollToPosition(adapter.items.size - 1)
+                                }
+                                Thread.sleep(1000)
+                                continue
+                            }
+                        }
+                        AssistantAccessibilityService.instance?.pressBack()
+                        if (liveResumeConflictRounds >= 2) {
+                            finalReply = "奖励广告里反复夹带直播间内容，系统已停止以避免误操作；请手动回到任务页后重试。"
+                            break
+                        }
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "🛑 系统提示：刚离开直播间又出现“继续观看”，这是奖励广告与直播间守卫冲突。已按返回离开冲突层；" +
+                                    "下一轮回到任务页后继续找与目标直接相关的免费广告入口，不要再立刻恢复刚才的播放。"
+                            )
+                        })
+                        Thread.sleep(1200)
+                        continue
+                    }
                     val clickResult = AssistantAccessibilityService.instance?.clickText(rewardContinueLabel)
                     if (clickResult?.startsWith("已") == true) {
                         android.util.Log.i("AIButler", "AGLM resumed rewarded ad via $rewardContinueLabel")
@@ -2050,10 +2161,12 @@ class MainActivity : AppCompatActivity() {
                         AssistantAccessibilityService.instance?.pressBack()
                     }
                     rewardLayerExitRounds++
+                    if (completionEvidenceFresh) adRewardCompletions++
                     android.util.Log.i(
                         "AIButler",
                         "AGLM reward-layer exit #$rewardLayerExitRounds: evidence=${rewardCompletion?.evidence}, " +
-                            "label=${rewardCompletion?.closeLabel}, structural=$usedStructuralExit, explicit=$usedExplicitExit"
+                            "label=${rewardCompletion?.closeLabel}, structural=$usedStructuralExit, explicit=$usedExplicitExit, " +
+                            "completions=$adRewardCompletions"
                     )
                     runOnUiThread {
                         adapter.add(
@@ -2080,7 +2193,8 @@ class MainActivity : AppCompatActivity() {
                                 "content",
                                 "✅ 系统提示：屏幕出现「${rewardCompletion?.evidence}」，本轮奖励证据已经成立。" +
                                     "系统已退出当前广告/结算层，这不是任务终点。下一轮必须回到任务中心或赚钱页，" +
-                                    "重新读取同一个广告任务入口并开始下一轮；绝不要点击「点击并浏览/额外得金币」这类广告 CTA，也不要输出 finish。"
+                                    "重新读取同一个广告任务入口并开始下一轮；绝不要点击「点击并浏览/额外得金币/再看一个再领金币」" +
+                                    "这类广告 CTA 或挽留弹窗，也不要输出 finish。"
                             )
                         }
                     )
@@ -2143,15 +2257,42 @@ class MainActivity : AppCompatActivity() {
                         TaskCardMemory.mark(this, appPkg, lastCardLabel, good = false)
                     }
                     lastCardLabel = ""
-                    AssistantAccessibilityService.instance?.pressBack()
+                    // 奖励弹窗常不响应 Back，只能点角上的关闭控件；先点控件，Back 只做兜底
+                    val exitControl = PageGuard.rewardActivityExitControl(compactGuardDump)
+                    val explicitExit = when {
+                        exitControl == null -> null
+                        PageGuard.isGlyphCloseQuery(exitControl.closeLabel) &&
+                            exitControl.x != null && exitControl.y != null -> {
+                            val px = ((exitControl.x!! * realW) / 999f).coerceIn(0f, (realW - 1).toFloat())
+                            val py = ((exitControl.y!! * realH) / 999f).coerceIn(0f, (realH - 1).toFloat())
+                            if (AssistantAccessibilityService.instance?.tap(px, py) == true)
+                                "已用坐标点击「${exitControl.closeLabel}」"
+                            else null
+                        }
+                        else -> AssistantAccessibilityService.instance?.clickText(exitControl.closeLabel!!)
+                    }
+                    val usedExplicitExit = explicitExit?.startsWith("已") == true
+                    if (!usedExplicitExit) {
+                        AssistantAccessibilityService.instance?.pressBack()
+                    }
                     rewardActivityExitRounds++
-                    android.util.Log.i("AIButler", "AGLM reward-activity exit #$rewardActivityExitRounds: pkg=$appPkg")
+                    android.util.Log.i(
+                        "AIButler",
+                        "AGLM reward-activity exit #$rewardActivityExitRounds: " +
+                            "label=${exitControl?.closeLabel}, explicit=$usedExplicitExit, pkg=$appPkg"
+                    )
                     runOnUiThread {
-                        adapter.add(ChatAdapter.Msg("system", "🎯 发现与任务无关的活动页，已自动返回"))
+                        adapter.add(
+                            ChatAdapter.Msg(
+                                "system",
+                                if (usedExplicitExit) "🎯 发现与任务无关的活动弹窗，已点击「${exitControl?.closeLabel}」关闭"
+                                else "🎯 发现与任务无关的活动页，已自动返回"
+                            )
+                        )
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
                     if (rewardActivityExitRounds >= 3) {
-                        finalReply = "多次误入投币/抽奖类活动页，为防金币被消耗已停止。请手动关闭活动后重试。"
+                        finalReply = "多次尝试退出投币/抽奖类活动弹窗未成功，为防金币被消耗已停止。请手动关闭活动后重试。"
                         android.util.Log.i("AIButler", "AGLM reward-activity exit breaker fired")
                         break
                     }
@@ -2159,7 +2300,7 @@ class MainActivity : AppCompatActivity() {
                         addProperty("role", "user")
                         addProperty(
                             "content",
-                            "🛑 系统提示：刚才那页是投币/报名/抽奖类活动页，参与会消耗或锁定金币，已自动按返回离开。" +
+                            "🛑 系统提示：刚才那页是投币/报名/抽奖类活动页（或其弹窗），参与会消耗或锁定金币，已自动关闭/离开。" +
                                 "用户要的是「$userText」，绝不要再点任何带「投币/报名/立即参与/抽奖」字样的入口；只执行看广告、领取、签到类动作。"
                         )
                     })
@@ -2738,6 +2879,30 @@ class MainActivity : AppCompatActivity() {
                             continue
                         }
                     }
+                    // 数量型广告任务（看3个广告刷金币）：finish 由机械计数裁决。
+                    // 真机曾出现零广告时模型口头报完成、完成关被页面"3个"字样放行（假完成），
+                    // 所以这里只认结算层退出计数，不够目标数一律拒绝（无终止信号最多拒 12 次防烧轮次）。
+                    if (quantifiedAdTarget != null && quantifiedAdTarget > 0 &&
+                        adRewardCompletions < quantifiedAdTarget &&
+                        !Regex("今日已达上限|明日再来|次数已用完|次数用完|已达上限|没有更多|再看看别的").containsMatchIn(screenDump) &&
+                        adLoopFinishRejects < 12
+                    ) {
+                        adLoopFinishRejects++
+                        android.util.Log.i(
+                            "AIButler",
+                            "AGLM quantified-ad finish rejected: $adRewardCompletions/$quantifiedAdTarget #$adLoopFinishRejects"
+                        )
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "🛑 系统校验：任务要求看 ${quantifiedAdTarget} 个广告，系统已确认完成的只有 ${adRewardCompletions} 个（以领取结算证据为准，口头汇报不算）。" +
+                                    "这次 finish 已拒绝；请回到任务中心继续点击同一个广告任务入口，直到完成数量达标或页面出现终止提示。"
+                            )
+                        })
+                        finishVerifyCount = 0
+                        continue
+                    }
                     val quoted = answer.indexOf('"')
                     finalReply = if (quoted >= 0) {
                         answer.substring(quoted + 1)
@@ -3140,8 +3305,11 @@ class MainActivity : AppCompatActivity() {
                     finalReply = "连续6次重复同一动作都没有推进任务，已自动停止。请手动确认目标入口后重试。"
                     break
                 }
-                if (sameTapCount == 4) {
-                    // 自愈第二档：滑屏无效时多半卡在全屏广告/视频层，按返回是通用退出方式
+                val pageBody = Regex("页面内容:(.*?)关键元素", RegexOption.DOT_MATCHES_ALL)
+                    .find(screenDump)?.groupValues?.get(1)?.replace(Regex("\\s+"), "").orEmpty()
+                if (sameTapCount == 4 || (swipeM != null && sameTapCount >= 2 && pageBody.isBlank())) {
+                    // 自愈第二档：滑屏无效时多半卡在全屏广告/视频层，按返回是通用退出方式。
+                    // 读屏只剩空白容器时，同一方向连滑 2 次就要提前返回，避免在无文字层里空烧轮次。
                     val backed = AssistantAccessibilityService.instance?.pressBack() == true
                     android.util.Log.i("AIButler", "AGLM 死点自愈: Back=$backed")
                     ctx.add(JsonObject().apply {
@@ -3244,23 +3412,13 @@ class MainActivity : AppCompatActivity() {
                     if (verifiedByCheck) addProperty("verified", true)
                 })
                 val judgedSuccess = reply.contains("✅")
-                // 勾=记成功经验；叉=记失败经验（AI 下次避开）；null=不记录/超时未答。
-                // AI 自述失败（无✅）时不弹窗，直接交给总结模型判失败经验。
-                val verdict = if (judgedSuccess)
-                    AssistantAccessibilityService.instance?.showSuccessConfirmation(userText, reply)
-                else null
-                val recordExperience = !judgedSuccess || verdict != null
-                val forceSuccess = when (verdict) {
-                    TaskVerdict.CONFIRMED -> true
-                    TaskVerdict.MARK_FAILED -> false
-                    else -> null
-                }
-                // Bug#3附带：目标应用从未到达时不允许保存为成功经验
                 val targetNeverReached = guessedApp != null &&
                     (targetAppPackage == null || targetAppPackage !in visitedPackages)
+                // 机械校验优先；没有机械证据时由经验总结模型基于轨迹判定，用户不再补勾叉。
                 val effectiveForceSuccess = when {
                     targetNeverReached -> false
-                    else -> forceSuccess
+                    verifiedByCheck -> true
+                    else -> null
                 }
                 // 先把结果立刻显示给用户；经验总结要再跑一次大模型调用，放到后台，完成后再补充显示
                 runOnUiThread {
@@ -3273,39 +3431,32 @@ class MainActivity : AppCompatActivity() {
                 val effectiveSteps = recordingSteps.filter { step ->
                     step.actionType == "back" || step.targetFingerprint != step.sourceFingerprint
                 }
-                if (recordExperience) {
-                    if (verdict == TaskVerdict.CONFIRMED && effectiveSteps.isNotEmpty() && targetAppPackage != null) {
-                        val taskKeywords = Regex("[\\u4e00-\\u9fa5]{2,}").findAll(userText)
-                            .map { it.value }.filter { it.length >= 2 }.take(5).toList()
-                        val savedPath = RecordedPath(
-                            taskKeywords = taskKeywords,
-                            targetPackage = targetAppPackage!!,
-                            targetAppName = guessedApp?.first ?: "",
-                            steps = effectiveSteps,
-                            successCount = 1
-                        )
-                        PathMemoryStore.upsert(this, savedPath)
-                        runOnUiThread {
-                            adapter.add(ChatAdapter.Msg("system", "💾 已记录有效任务路径（${effectiveSteps.size}步），下次同类任务将自动快速回放。"))
-                            rv.scrollToPosition(adapter.items.size - 1)
-                        }
-                    }
-                    Thread {
-                        val experienceResult = saveAutoGlmExperience(
-                            userText, reply, visitedPackages.toList(), pageTrace.toList(), actionTrace.toList(),
-                            forceSuccess = effectiveForceSuccess
-                        )
-                        if (experienceResult.isNotBlank()) runOnUiThread {
-                            adapter.add(ChatAdapter.Msg("system", experienceResult))
-                            rv.scrollToPosition(adapter.items.size - 1)
-                        }
-                    }.start()
-                } else {
+                if (effectiveForceSuccess == true && effectiveSteps.isNotEmpty() && targetAppPackage != null) {
+                    val taskKeywords = Regex("[\\u4e00-\\u9fa5]{2,}").findAll(userText)
+                        .map { it.value }.filter { it.length >= 2 }.take(5).toList()
+                    val savedPath = RecordedPath(
+                        taskKeywords = taskKeywords,
+                        targetPackage = targetAppPackage!!,
+                        targetAppName = guessedApp?.first ?: "",
+                        steps = effectiveSteps,
+                        successCount = 1
+                    )
+                    PathMemoryStore.upsert(this, savedPath)
                     runOnUiThread {
-                        adapter.add(ChatAdapter.Msg("system", "⛔ 未记录：本次任务路径和经验已丢弃。"))
+                        adapter.add(ChatAdapter.Msg("system", "💾 已记录有效任务路径（${effectiveSteps.size}步），下次同类任务将自动快速回放。"))
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
                 }
+                Thread {
+                    val experienceResult = saveAutoGlmExperience(
+                        userText, reply, visitedPackages.toList(), pageTrace.toList(), actionTrace.toList(),
+                        mechanicalSuccess = effectiveForceSuccess
+                    )
+                    runOnUiThread {
+                        if (experienceResult.isNotBlank()) adapter.add(ChatAdapter.Msg("system", experienceResult))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                }.start()
             }
         } catch (e: Exception) {
             android.util.Log.e("AIButler", "AGLM 异常 class=${e.javaClass.name} message=${e.message}", e)
@@ -3566,26 +3717,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** 函数调用模式的经验保存：把任务结果存入经验库，下次同类任务注入系统提示 */
-    private fun saveAgentExperience(task: String, result: String, requireSuccessConfirmation: Boolean = false) {
+    private fun saveAgentExperience(task: String, result: String, requireOutcomeJudgement: Boolean = false) {
         if (!Prefs.configured(this)) return
         try {
             val guessed = !result.contains("失败") && !result.contains("无法") &&
                 !result.contains("超时") && !result.contains("已停止") && !result.contains("拦截")
             if (result.length < 5) return
             var recordSuccess = guessed
-            if (guessed && requireSuccessConfirmation) {
-                // 疑似成功要经用户勾/叉确认：勾=成功经验，叉=失败经验，不记录=丢弃
-                when (AssistantAccessibilityService.instance?.showSuccessConfirmation(task, result)) {
-                    TaskVerdict.CONFIRMED -> recordSuccess = true
-                    TaskVerdict.MARK_FAILED -> recordSuccess = false
-                    else -> {
+            if (guessed && requireOutcomeJudgement) {
+                recordSuccess = judgeTaskOutcome(task, result)
+                    ?: run {
                         runOnUiThread {
-                            adapter.add(ChatAdapter.Msg("system", "⛔ 未确认；本次不记录经验。"))
+                            adapter.add(ChatAdapter.Msg("system", "⚠️ 结果证据不足，本次经验不记录。"))
                             rv.scrollToPosition(adapter.items.size - 1)
                         }
                         return
                     }
-                }
             }
             AgentExperienceStore.upsert(this, AgentExperience(
                 title = task.take(20),
@@ -3596,6 +3743,37 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.i("AIButler", "AGENT 经验已保存: ${task.take(30)} 判定=${if (recordSuccess) "成功" else "失败"}")
         } catch (e: Exception) {
             android.util.Log.w("AIButler", "保存经验失败", e)
+        }
+    }
+
+    /** 通用结果审计：模型只回答完成与否，不改变已经结束的任务，也不写入任何凭据类内容。 */
+    private fun judgeTaskOutcome(task: String, result: String): Boolean? {
+        if (!Prefs.configured(this)) return null
+        return try {
+            val prompt = """
+                你是手机自动化任务的结果审计员。严格判断用户目标是否已经真实完成，不要相信最终回复里的“已完成”或✅符号。
+                页面/动作证据和声明冲突时判失败；只执行到支付、下单、验证码等安全确认前一步并明确交还用户时，任务执行本身判成功。
+                只输出 JSON：{"SUCCESS":true} 或 {"SUCCESS":false}
+
+                用户任务：$task
+                执行结果：$result
+            """.trimIndent()
+            val messages = JsonArray().apply {
+                add(JsonObject().apply {
+                    addProperty("role", "user")
+                    addProperty("content", prompt)
+                })
+            }
+            val raw = LlmClient.chat(
+                Prefs.baseUrl(this), Prefs.apiKey(this), Prefs.model(this),
+                messages, JsonArray(), true
+            ).content
+            TaskOutcomeJudge.parse(raw).also {
+                android.util.Log.i("AIButler", "AGENT outcome judged=$it raw=${raw.take(120)}")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("AIButler", "任务结果评审失败", e)
+            null
         }
     }
 
@@ -3644,17 +3822,19 @@ class MainActivity : AppCompatActivity() {
         packages: List<String>,
         pages: List<String>,
         actions: List<String>,
-        forceSuccess: Boolean? = null
+        mechanicalSuccess: Boolean? = null
     ): String {
         if (!Prefs.configured(this)) return ""
         return try {
-            val userOverride = when (forceSuccess) {
-                true -> "\n用户已人工确认本次任务实际是「成功」，SUCCESS 字段必须填 true。"
-                false -> "\n用户已人工确认本次任务实际是「失败」，SUCCESS 字段必须填 false；请总结这次失败的原因和应避开的走法。"
+            val userOverride = when (mechanicalSuccess) {
+                true -> "\n系统机械证据已确认任务实际是「成功」，SUCCESS 字段必须填 true。"
+                false -> "\n系统证据已证明任务实际是「失败」，SUCCESS 字段必须填 false；请总结这次失败的原因和应避开的走法。"
                 null -> ""
             }
             val prompt = """
                 请把下面一次手机自动操作总结为可复用经验。不要记录账号、密码、验证码、IMEI、余额等敏感值；只记录应用名、页面名、入口文字、路径、弹窗处理和失败原因。
+                先独立核对 SUCCESS：不要相信结果里的“已完成”或✅符号；页面/动作证据和声明冲突时 SUCCESS 填 false。
+                如果只执行到支付、下单、验证码等安全确认前一步并明确交还用户，任务执行本身算成功。
                 严格输出以下字段：
                 TITLE: 不超过20字的经验标题
                 CONTENT: 不超过300字的路径和要点
@@ -3683,11 +3863,12 @@ class MainActivity : AppCompatActivity() {
             val content = field("CONTENT").ifBlank { result.take(280) }
             val keywords = field("KEYWORDS").split(',', '，', ';', '；').map { it.trim() }.filter { it.isNotBlank() }
             val packageNames = field("PACKAGES").split(',', '，', ';', '；').map { it.trim() }.filter { it.isNotBlank() }
-            val success = forceSuccess ?: field("SUCCESS").lowercase().contains("true")
+            val success = mechanicalSuccess ?: TaskOutcomeJudge.parse(raw) ?: false
             AgentExperienceStore.upsert(
                 this, AgentExperience(title, content, keywords, packageNames, success)
             )
-            "📚 已保存可复用经验：$title"
+            if (success) "📚 已保存可复用经验：$title"
+            else "🧭 已保存失败教训：$title"
         } catch (e: Exception) {
             android.util.Log.w("AIButler", "保存经验失败", e)
             ""

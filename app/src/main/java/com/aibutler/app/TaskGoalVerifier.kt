@@ -21,7 +21,12 @@ object TaskGoalVerifier {
         )
     }
 
-    data class QuantityGoal(val value: String, val unit: String) {
+    data class QuantityGoal(
+        val value: String,
+        val unit: String,
+        /** 数量挂在动作动词上（看3个广告/发5条消息）：数的是做了几次，屏幕字样不是证据 */
+        val isActionCount: Boolean = false
+    ) {
         val display = value + unit
     }
 
@@ -105,7 +110,7 @@ object TaskGoalVerifier {
                 // 滚轮已到目标值（含最近整数档）不算完成证据：滚轮 label 本身就是"2.5杯"，
                 // compactScreen.contains 会把滚轮自己的文本误判成"屏幕已看到目标值"→ 跳过让模型走保存
             }
-            else if (compactScreen.contains(target.display)) {
+            else if (!target.isActionCount && compactScreen.contains(target.display)) {
                 return Check(Status.CONFIRMED, "屏幕显示目标数量 ${target.display}")
             }
         }
@@ -197,7 +202,23 @@ object TaskGoalVerifier {
         // 只对带小数点的值去尾零（"2.0"→"2"）；整数不能动，否则 "10".trimEnd('0','.') 会变成 "1"
         val rawNum = m.groupValues[1]
         val value = (if (rawNum.contains('.')) rawNum.trimEnd('0').trimEnd('.') else rawNum).ifBlank { "0" }
-        return QuantityGoal(value, m.groupValues[2])
+        // 数量紧跟在动作动词后面 = 动作次数（看3个广告）；前面没有动作动词才是页面值（下单2杯奶茶的"2杯"）
+        val before = raw.substring(0, m.range.first).takeLast(6)
+        val isActionCount = Regex(
+            "(看|刷|浏览|观看|听|播放|发|点赞|评论|关注|邀请|买|下单|点|开|设|订|拍|加|回复)[^0-9]*$"
+        ).containsMatchIn(before)
+        return QuantityGoal(value, m.groupValues[2], isActionCount)
+    }
+
+    /**
+     * 提取「N个广告」类动作数量目标；数量词不在名词前或没有数量词时返回 null。
+     * 供完成关做机械计数裁决，替代"屏幕出现目标字样"这类假证据。
+     */
+    fun actionQuantityTarget(raw: String, noun: Regex): Int? {
+        val text = raw.replace(Regex("\\s+"), "")
+        val m = Regex("(\\d+|[零一二两三四五六七八九十]+)个(?=" + noun.pattern + ")").find(text)
+            ?: return null
+        return number(m.groupValues[1])
     }
 
     private fun parseAbsoluteDate(raw: String): String? {
@@ -213,7 +234,7 @@ object TaskGoalVerifier {
         return Regex("(今天|明天|后天|大后天)").find(raw)?.groupValues?.get(1)
     }
 
-    private fun number(raw: String): Int? {
+    fun number(raw: String): Int? {
         if (raw.isBlank()) return null
         raw.toIntOrNull()?.let { return it }
         if (raw.length == 1) return cnDigits[raw[0]]

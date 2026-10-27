@@ -1026,8 +1026,26 @@ object AgentEngine {
                     PageGuard.isRewardTask(userTask) &&
                     PageGuard.isRewardActivityPage(normalizedPage, userTask)
                 ) {
-                    val info = if (svc?.pressBack() == true) "已按返回退出投币/抽奖类活动页" else DeviceTools.NO_A11Y
-                    android.util.Log.i("AIButler", "Blocked Tap in reward activity page")
+                    // 与主循环守卫对齐：奖励弹窗常不响应 Back，先点安全关闭控件再兜底返回
+                    val exitControl = PageGuard.rewardActivityExitControl(screenDump.orEmpty())
+                    val closedInfo = when {
+                        exitControl != null &&
+                            PageGuard.isGlyphCloseQuery(exitControl.closeLabel) &&
+                            exitControl.x != null && exitControl.y != null -> {
+                            val px = norm(exitControl.x!!, realW).toFloat()
+                            val py = norm(exitControl.y!!, realH).toFloat()
+                            if (svc?.tap(px, py) == true) "已用坐标点击「${exitControl.closeLabel}」关闭活动弹窗" else null
+                        }
+                        exitControl != null && svc?.clickText(exitControl.closeLabel!!)?.startsWith("已") == true ->
+                            "已点击「${exitControl.closeLabel}」关闭活动弹窗"
+                        else -> null
+                    }
+                    val info = closedInfo
+                        ?: if (svc?.pressBack() == true) "已按返回退出投币/抽奖类活动页" else DeviceTools.NO_A11Y
+                    android.util.Log.i(
+                        "AIButler",
+                        "Blocked Tap in reward activity page: label=${exitControl?.closeLabel}"
+                    )
                     return AglmResult(info, false, "__JUMP_BLOCK__")
                 }
                 // 🎬 误入拍摄/创作页：非创作任务里一旦走到发布就是高危动作，立即不保存退出
@@ -1057,6 +1075,11 @@ object AgentEngine {
                     )
                 }
                 val isNonShoppingTask = !PageGuard.isCommerceTask(userTask)
+                val targetAppInForeground = allowedApp?.second?.let { pkg ->
+                    svc?.currentPackage() == pkg
+                } == true
+                val neutralBottomNavigation = targetAppInForeground &&
+                    PageGuard.isNeutralBottomNavigation(nearbyLabel, p.second)
                 if (str("message") == "重要操作") AglmResult("⚠️ 敏感操作已跳过（涉及支付/隐私，请你手动处理）", false)
                 else if (isCommercePage && isNonShoppingTask) {
                     android.util.Log.i("AIButler", "Blocked Tap on commerce page")
@@ -1092,7 +1115,8 @@ object AgentEngine {
                         "__JUMP_BLOCK__"
                     )
                 }
-                else if (!isExplicitDismiss && PageGuard.hasMissionVerbs(userTask) &&
+                else if (!isExplicitDismiss && !neutralBottomNavigation &&
+                    PageGuard.hasMissionVerbs(userTask) &&
                     PageGuard.isOffMissionTap(userTask, nearbyLabel, cardContext)
                 ) {
                     android.util.Log.i(
