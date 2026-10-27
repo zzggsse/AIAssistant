@@ -1527,6 +1527,8 @@ class MainActivity : AppCompatActivity() {
             var downloadWallExitRounds = 0
             var rewardActivityExitRounds = 0
             var rewardLayerExitRounds = 0
+            var lastRoundHadRewardCompletion = false   // 完成证据新鲜度：只在证据新出现时才当作结算层（体检追加轮 P1-8）
+            var adLoopFinishRejects = 0                // 循环型广告任务 finish 拒绝次数：防无终止信号时无限烧轮次（体检 P2-2）
             var rewardCenterExitRounds = 0
             var adTaskFeedRounds = 0
             var retryNote = ""
@@ -1798,7 +1800,15 @@ class MainActivity : AppCompatActivity() {
                     break
                 }
                 val compactGuardDump = screenDump.replace(Regex("\\s+"), "")
-                if (PageGuard.isUnintendedLiveRoom(userText, compactGuardDump)) {
+                // 倒计时读数提前到页面级守卫之前：激励广告倒计时活跃时，直播间/下载墙/活动页守卫都要让路，
+                // 否则广告素材自带的直播引流/下载条/抽奖文案会触发强退、作废已看时长（体检 P2-4/P1-1）
+                val passiveVideoTask = AgentEngine.isPassiveVideoTask(userText)
+                val rewardCountdownSeconds = if (passiveVideoTask) {
+                    null
+                } else {
+                    AgentEngine.rewardCountdownSeconds(compactGuardDump)
+                }
+                if (rewardCountdownSeconds == null && PageGuard.isUnintendedLiveRoom(userText, compactGuardDump)) {
                     val exitLabel = PageGuard.liveRoomExitLabel(screenDump)
                     val exited = when {
                         exitLabel != null ->
@@ -1842,12 +1852,6 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 // 页面文本指纹：本轮和上轮完全一致 = 冻结页（假倒计时/广告墙，等待无效）
-                val passiveVideoTask = AgentEngine.isPassiveVideoTask(userText)
-                val rewardCountdownSeconds = if (passiveVideoTask) {
-                    null
-                } else {
-                    AgentEngine.rewardCountdownSeconds(compactGuardDump)
-                }
                 val countdownProgressed = AgentEngine.rewardCountdownProgressed(
                     lastRewardCountdownSeconds,
                     rewardCountdownSeconds
@@ -1868,7 +1872,8 @@ class MainActivity : AppCompatActivity() {
                     "加入购物车|购买数量|立即抢购|立即购买|去支付|提交订单|确认订单",
                     RegexOption.IGNORE_CASE
                 ).containsMatchIn(compactGuardDump)
-                if (commerceTaskPage && !Regex("下单|购买|支付|抢购|购物车").containsMatchIn(userText)) {
+                // 购物任务豁免统一走 PageGuard.isCommerceTask：老词表缺「买」，「买杯奶茶」被反复按返回（体检 P1-6）
+                if (commerceTaskPage && !PageGuard.isCommerceTask(userText)) {
                     android.util.Log.i("AIButler", "AGLM force back from commerce task page")
                     AssistantAccessibilityService.instance?.pressBack()
                     runOnUiThread {
@@ -1998,22 +2003,40 @@ class MainActivity : AppCompatActivity() {
                         )
                     })
                 }
-                // 🎁 奖励完成层不是任务终点：先拿到“完成证据”，立即退出广告/结算层，再回任务页继续循环。
+                // 🎁 奖励完成层不是任务终点：完成证据**本轮新出现**时立即退出广告/结算层，再回任务页继续循环。
                 // 这里不信任模型对底部 CTA 的理解；系统只点击完成提示同一语境里的关闭控件，找不到才 Back。
-                val rewardCompletion = if (!passiveVideoTask && rewardCountdownSeconds == null) {
+                // 「今日已签到/已成功领取」也常驻在普通状态页上——只在证据新出现时才当作结算层，
+                // 常驻状态页放行给模型走正常 finish，否则会被连点4次关闭后以失败文案告终（体检追加轮 P1-8）。
+                val completionEvidenceNow = !passiveVideoTask && PageGuard.hasRewardCompletion(screenDump)
+                val rewardCompletion = if (completionEvidenceNow && rewardCountdownSeconds == null) {
                     PageGuard.rewardCompletionExit(screenDump)
                 } else null
+                val completionEvidenceFresh = completionEvidenceNow && !lastRoundHadRewardCompletion
+                lastRoundHadRewardCompletion = completionEvidenceNow
                 val rewardAdLayer = rewardCompletion != null && Regex(
                     "广告|额外得|点击并浏览|继续观看|激励|看完.*领|浏览.*秒"
                 ).containsMatchIn(compactGuardDump)
                 if (PageGuard.isRewardTask(userText) &&
+                    completionEvidenceFresh &&
                     (rewardCompletion?.closeLabel != null || rewardAdLayer)
                 ) {
                     val structuralExit = AssistantAccessibilityService.instance?.clickRewardCompletionExit()
                     val usedStructuralExit = structuralExit?.startsWith("已") == true
                     val explicitExit = if (!usedStructuralExit) {
-                        rewardCompletion?.closeLabel?.let {
-                            AssistantAccessibilityService.instance?.clickText(it)
+                        val rc = rewardCompletion
+                        when {
+                            rc == null || rc.closeLabel == null -> null
+                            // glyph/无名标签不做 clickText 全树文本匹配（会误中「金币×100」类节点），按行坐标直点（体检追加轮 P1-8）
+                            PageGuard.isGlyphCloseQuery(rc.closeLabel) && rc.x != null && rc.y != null -> {
+                                // 与 AgentEngine.norm / labelAtNormalized 同规：999 → total-1，
+                                // 落在屏幕外一像素的手势会直接失败（体检 P3-2 同族）
+                                val px = ((rc.x!! * realW) / 999f).coerceIn(0f, (realW - 1).toFloat())
+                                val py = ((rc.y!! * realH) / 999f).coerceIn(0f, (realH - 1).toFloat())
+                                if (AssistantAccessibilityService.instance?.tap(px, py) == true)
+                                    "已用坐标点击「${rc.closeLabel}」"
+                                else null
+                            }
+                            else -> AssistantAccessibilityService.instance?.clickText(rc.closeLabel)
                         }
                     } else null
                     val usedExplicitExit = explicitExit?.startsWith("已") == true
@@ -2057,8 +2080,11 @@ class MainActivity : AppCompatActivity() {
                     )
                     Thread.sleep(1200)
                     continue
-                } else if (!PageGuard.hasRewardCompletion(screenDump)) {
-                    rewardLayerExitRounds = 0
+                } else {
+                    // 证据消失、或证据是常驻状态（本轮未触发强退）→ 计数清零，避免跨场景累积误熔断（体检追加轮 P1-8）
+                    if (!completionEvidenceNow || !completionEvidenceFresh) {
+                        rewardLayerExitRounds = 0
+                    }
                 }
                 // 📵 下载墙页：这类广告页会自动触发APK下载/安装（用户投诉「老安装软件」的元凶），绝不停留。
                 // 但活跃激励广告例外：奖励倒计时存在时提前 Back 会作废已看时长；应等待或点「继续观看」。
@@ -2180,6 +2206,8 @@ class MainActivity : AppCompatActivity() {
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
                     DeviceTools.openApp(this, guessedApp.first)
+                    // 等应用起来再读屏，否则这里会快速自旋连续 openApp（体检 P3-11）
+                    Thread.sleep(1200)
                     continue
                 }
                 if (targetAppPackage != null && appPkg == targetAppPackage) {
@@ -2673,11 +2701,17 @@ class MainActivity : AppCompatActivity() {
                         })
                         continue
                     }
-                    val isLoopingAdTask = Regex("看广告|刷广告|赚金币|赚积分|看激励|浏览广告|做任务|去赚钱").containsMatchIn(userText)
+                    // 一次性广告任务（「看一个广告」，带数量限定）有明确终点，不属于循环型：
+                    // 完成一个就该允许 finish，否则拿到领取成功证据也被无限拒绝（体检 P2-2）
+                    val isLoopingAdTask = !TaskCompletionVerifier.hasQuantityConstraint(userText) &&
+                        Regex("看广告|刷广告|赚金币|赚积分|看激励|浏览广告|做任务|去赚钱").containsMatchIn(userText)
                     if (isLoopingAdTask) {
-                        val hasTerminationSignal = Regex("今日已达上限|明日再来|次数已用完|次数用完|已达上限|没有更多|再看看别的").containsMatchIn(screenDump)
+                        // 拒绝 12 次后放行：App 没有终止文案时不能无限烧轮次，模型坚持即如实收尾（体检 P2-2）
+                        val hasTerminationSignal = Regex("今日已达上限|明日再来|次数已用完|次数用完|已达上限|没有更多|再看看别的").containsMatchIn(screenDump) ||
+                            adLoopFinishRejects >= 12
                         if (!hasTerminationSignal) {
-                            android.util.Log.i("AIButler", "AGLM finish rejected: looping ad task without termination signal")
+                            adLoopFinishRejects++
+                            android.util.Log.i("AIButler", "AGLM finish rejected: looping ad task without termination signal #$adLoopFinishRejects")
                             ctx.add(JsonObject().apply {
                                 addProperty("role", "user")
                                 addProperty(
@@ -2842,7 +2876,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 val res = AgentEngine.execAutoGLM(
-                    this, answer, realW, realH, userText, screenDump, guessedApp
+                    this, answer, realW, realH, userText, screenDump, guessedApp,
+                    rewardCountdownSeconds = rewardCountdownSeconds
                 )
                 if (!res.finished && res.message != "__PARSE_FAIL__" && !res.settled) {
                     AgentEngine.waitForActionSettle(answer, preActionFp?.first)

@@ -141,6 +141,8 @@ object DeviceTools {
                 else -> 0
             }
             if (score > 0) Cand(label, ri.activityInfo.packageName, score) else null
+        // 平分时短名优先：查「淘」要命中「淘宝」而不是「淘宝人生」，与 guessApp 的方向保持一致（体检 P1-4）。
+        // maxWithOrNull 取比较器最大值，thenByDescending(长度) 才会让短名胜出
         }.maxWithOrNull(compareBy<Cand> { it.score }.thenByDescending { it.label.length })
             ?.let { it.label to it.pkg }
     }

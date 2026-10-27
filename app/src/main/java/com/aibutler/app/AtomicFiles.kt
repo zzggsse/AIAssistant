@@ -25,12 +25,27 @@ object AtomicFiles {
                 fos.write(content.toByteArray())
                 fos.fd.sync()
             }
-            if (tmp.renameTo(file)) return
+            if (tmp.renameTo(file)) {
+                // .recover 只是同一份新内容的副本：正式文件落位后立即清掉，避免残留堆积
+                File(file.parentFile, file.name + ".recover").delete()
+                return
+            }
             // 个别文件系统 rename 不覆盖已存在文件：退化为"删除后改名"（窗口极小）
-            if (file.exists()) file.delete()
-            if (tmp.renameTo(file)) return
+            // 先留 .recover 副本：若删除后兜底写入又失败，新旧全无 = 整个存储清零（体检 P3-6）
+            if (file.exists()) {
+                try {
+                    val recover = File(file.parentFile, file.name + ".recover")
+                    recover.writeText(content)
+                } catch (_: Exception) { }
+                file.delete()
+            }
+            if (tmp.renameTo(file)) {
+                File(file.parentFile, file.name + ".recover").delete()
+                return
+            }
             // 仍失败：最后兜底直接写，至少不丢数据
             file.writeText(content)
+            File(file.parentFile, file.name + ".recover").delete()
             tmp.delete()
         } catch (e: Exception) {
             try { tmp.delete() } catch (_: Exception) { }

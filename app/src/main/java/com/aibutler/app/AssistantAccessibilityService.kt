@@ -125,6 +125,13 @@ class AssistantAccessibilityService : AccessibilityService() {
         val latch = CountDownLatch(1)
         var verdict: TaskVerdict? = null
         mainHandler.post {
+            // 服务可能在 post 入队后、执行前被系统销毁（体检 P3-3）：销毁后不得重建悬浮窗，
+            // 同时必须立即放行 latch：verdict 保持 null，按"超时未答"走既有兜底，
+            // 不让任务线程干等满 5 分钟宽限
+            if (instance !== this) {
+                latch.countDown()
+                return@post
+            }
             successOverlayRoot?.let(::removeFromOverlay)
             successOverlayRoot = buildSuccessConfirmation(task, result) { value ->
                 if (verdict == null) verdict = value
@@ -157,6 +164,12 @@ class AssistantAccessibilityService : AccessibilityService() {
         val latch = CountDownLatch(1)
         var answer: SessionAsk? = null
         mainHandler.post {
+            // 服务可能在 post 入队后、执行前被系统销毁（体检 P3-3）：销毁后不得重建悬浮窗；
+            // answer 保持 null，按既有约定默认继续挂机
+            if (instance !== this) {
+                latch.countDown()
+                return@post
+            }
             sessionAskOverlayRoot?.let(::removeFromOverlay)
             sessionAskOverlayRoot = buildSessionContinueAsk(summary) { value ->
                 if (answer == null) answer = value
@@ -787,9 +800,7 @@ class AssistantAccessibilityService : AccessibilityService() {
         val latch = CountDownLatch(1)
         mainHandler.post {
             actionPreviewRoot?.let(::removeFromOverlay)
-            val preview = ActionTargetView(this).apply {
-                setTarget(x, y, label, action)
-            }
+            val preview = ActionTargetView(this)
             actionPreviewRoot = preview
             val added = addToOverlay(preview, modal = false) {
                 gravity = Gravity.TOP or Gravity.START
@@ -801,6 +812,10 @@ class AssistantAccessibilityService : AccessibilityService() {
             }
             if (added == null) {
                 actionPreviewRoot = null
+            } else {
+                // 先加窗再启动动画：setTarget 会启动无限循环动画，若加窗失败 view 永不 attach，
+                // onDetachedFromWindow（唯一 cancel 点）永远不触发，动画回调滞留主线程（体检 P3-4）
+                preview.setTarget(x, y, label, action)
             }
             latch.countDown()
             mainHandler.postDelayed({
@@ -910,7 +925,11 @@ class AssistantAccessibilityService : AccessibilityService() {
             val desc = n.contentDescription?.toString()?.trim()
             val r = Rect()
             n.getBoundsInScreen(r)
-            val onScreen = !r.isEmpty && r.top >= 0 && r.left >= 0 && r.top < sh && r.left < sw
+            // 只查 left/top 会放进中心在屏外的半露元素（右缘轮播/底部peek），
+            // click_number 点中心会落空——改成中心点必须落在屏内（体检 P3-1）
+            val onScreen = !r.isEmpty &&
+                r.exactCenterX() >= 0 && r.exactCenterX() < sw &&
+                r.exactCenterY() >= 0 && r.exactCenterY() < sh
             val interesting = (!text.isNullOrBlank()) || (!desc.isNullOrBlank()) || n.isClickable || n.isEditable
             if (onScreen && interesting) {
                 idx++
@@ -970,7 +989,10 @@ class AssistantAccessibilityService : AccessibilityService() {
             val desc = n.contentDescription?.toString()?.trim().orEmpty()
             val r = Rect()
             n.getBoundsInScreen(r)
-            val visible = !r.isEmpty && r.top >= 0 && r.left >= 0 && r.top < sh && r.left < sw
+            // 中心点必须落在屏内：半露元素的中心在屏外，产出 999 坐标点不中还会污染读屏（体检 P3-1）
+            val visible = !r.isEmpty &&
+                r.exactCenterX() >= 0f && r.exactCenterX() < sw &&
+                r.exactCenterY() >= 0f && r.exactCenterY() < sh
             if (visible) {
                 if ((text.isNotBlank() || desc.isNotBlank()) && !n.isClickable && !n.isEditable) {
                     if (pageText.length < 1200) {
@@ -1062,8 +1084,10 @@ class AssistantAccessibilityService : AccessibilityService() {
     fun labelAtNormalized(nx: Int, ny: Int): String {
         val root = rootInActiveWindow ?: return ""
         val (screenWidth, screenHeight) = realScreenSize()
-        val x = ((nx.coerceIn(0, 999) / 999.0) * screenWidth).toInt()
-        val y = ((ny.coerceIn(0, 999) / 999.0) * screenHeight).toInt()
+        // 999 → screenWidth 会越界一像素（合法范围 0..screenWidth-1），Rect.contains 永假；
+        // 与 AgentEngine.norm 同步钳制（体检 P3-2）
+        val x = ((nx.coerceIn(0, 999) / 999.0) * screenWidth).toInt().coerceIn(0, screenWidth - 1)
+        val y = ((ny.coerceIn(0, 999) / 999.0) * screenHeight).toInt().coerceIn(0, screenHeight - 1)
         val labels = LinkedHashSet<String>()
 
         fun walk(n: AccessibilityNodeInfo?) {
@@ -1130,8 +1154,9 @@ class AssistantAccessibilityService : AccessibilityService() {
     fun contextTextNear(nx: Int, ny: Int): String {
         val root = rootInActiveWindow ?: return ""
         val (screenWidth, screenHeight) = realScreenSize()
-        val px = ((nx.coerceIn(0, 999) / 999.0) * screenWidth).toInt()
-        val py = ((ny.coerceIn(0, 999) / 999.0) * screenHeight).toInt()
+        // 999 → screenWidth 越界一像素，bounds.contains 永假；与 AgentEngine.norm 同步钳制（体检 P3-2）
+        val px = ((nx.coerceIn(0, 999) / 999.0) * screenWidth).toInt().coerceIn(0, screenWidth - 1)
+        val py = ((ny.coerceIn(0, 999) / 999.0) * screenHeight).toInt().coerceIn(0, screenHeight - 1)
         val containers = ArrayList<Rect>()
 
         fun collectContainers(node: AccessibilityNodeInfo?) {
@@ -1265,7 +1290,11 @@ class AssistantAccessibilityService : AccessibilityService() {
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 val score = closeButtonScore(node, rewardRect) ?: continue
-                if (score >= 460 || sharesFamily(node, anchor, maxHops = 4)) {
+                // 高分语义候选（任意位置的「关闭/跳过/×」）也必须与完成提示同容器或同行，
+                // 否则页面上另一条 banner 的关闭按钮会被误当代点目标（体检追加轮 P2-10）
+                val centerYDelta = abs(rect.exactCenterY() - rewardRect.exactCenterY())
+                val looseSameRow = centerYDelta <= maxOf(70, (rewardRect.height() * 1.4).toInt())
+                if (looseSameRow || sharesFamily(node, anchor, maxHops = 8)) {
                     candidates.add(Candidate(node, rect, score))
                 }
             }
@@ -1308,10 +1337,18 @@ class AssistantAccessibilityService : AccessibilityService() {
         val out = ArrayList<AccessibilityNodeInfo>()
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         roots.forEach(queue::add)
-        while (queue.isNotEmpty() && out.size < limit) {
+        // 只收集"有趣"节点（有文字/描述或可交互），遍历仍走全树：
+        // 老写法按入队顺序装满 limit，主窗口树一大，后入队的弹窗窗口整个被截掉（体检追加轮 P2-12）
+        while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
-            out.add(node)
             try {
+                val ownText = node.text?.toString()?.trim().orEmpty()
+                val ownDesc = node.contentDescription?.toString()?.trim().orEmpty()
+                if ((ownText.isNotBlank() || ownDesc.isNotBlank() || node.isClickable ||
+                    node.isEditable || node.isScrollable) && out.size < limit
+                ) {
+                    out.add(node)
+                }
                 for (index in 0 until node.childCount) {
                     node.getChild(index)?.let(queue::add)
                 }
@@ -1362,7 +1399,9 @@ class AssistantAccessibilityService : AccessibilityService() {
         }
         val rect = Rect()
         node.getBoundsInScreen(rect)
-        if (rect.isEmpty) return "「$query」位置异常，已跳过点击"
+        // 坐标兜底前校验可见性：与 clickText 的兜底一致，点屏外节点会谎报成功（体检追加轮 P2-10）
+        val screen = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+        if (rect.isEmpty || !Rect.intersects(rect, screen)) return "「$query」位置异常，已跳过点击"
         return if (tap(rect.exactCenterX(), rect.exactCenterY())) "已用坐标点击「$query」" else "点击动作发送失败"
     }
 
@@ -1379,12 +1418,16 @@ class AssistantAccessibilityService : AccessibilityService() {
         }
         if (nodes.isEmpty()) return "屏幕上没找到「$query」，建议先调用 get_screen_state 看看当前屏幕有什么。"
 
-        // 优先点击本身可点击的节点，其次向上找可点击父节点，最后用手势坐标点
+        // 优先点击本身可点击的节点，其次向上找可点击父节点，最后用手势坐标点。
+        // 前两条路径也必须可见性校验：collectNodes 是全树搜索，屏外缓存 item / 隐藏弹层里的
+        // 同名节点 performAction 照样"成功"，会谎报已点击并绕过语义否决层（体检 P1-3）
+        val screenRect = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
         for (n in nodes) {
             if (n.isClickable) {
                 val r = Rect()
                 n.getBoundsInScreen(r)
-                if (!r.isEmpty) showActionPreview(r.exactCenterX(), r.exactCenterY(), query)
+                if (r.isEmpty || !Rect.intersects(r, screenRect)) continue
+                showActionPreview(r.exactCenterX(), r.exactCenterY(), query)
                 if (n.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return "已点击「$query」"
             }
         }
@@ -1395,7 +1438,8 @@ class AssistantAccessibilityService : AccessibilityService() {
             if (p != null && p.isClickable) {
                 val r = Rect()
                 p.getBoundsInScreen(r)
-                if (!r.isEmpty) showActionPreview(r.exactCenterX(), r.exactCenterY(), query)
+                if (r.isEmpty || !Rect.intersects(r, screenRect)) continue
+                showActionPreview(r.exactCenterX(), r.exactCenterY(), query)
                 if (p.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                     return "已点击「$query」（点的是它的容器）"
                 }

@@ -107,8 +107,10 @@ object LlmClient {
 
             while (true) {
                 val line = reader.readLine() ?: break
-                if (!line.startsWith("data: ")) continue
-                val data = line.removePrefix("data: ").trim()
+                // SSE 规范里冒号后的空格是可选的：data:{...} 与 data: {...} 都合法，
+                // 只认带空格的形式会把无空格厂商的所有 delta 丢掉、每次流式都降级重发（体检 P3-5）
+                if (!line.startsWith("data:")) continue
+                val data = line.removePrefix("data:").trim()
                 if (data == "[DONE]") { sawDone = true; break }
                 try {
                     val chunk = JsonParser.parseString(data).asJsonObject

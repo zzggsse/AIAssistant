@@ -88,6 +88,10 @@ object TaskCompletionVerifier {
         "\\d+\\s*(条|个|集|篇|名|分钟|分|小时|个小时|秒)|[一二两三四五六七八九十]+\\s*(条|个|集|篇|名)|半小时|[一二两]整?(天|晚|夜|小时)"
     )
 
+    /** 任务带数量/时长限定（「看一个广告」「刷10条视频」）→ 有明确终点，循环型闸门应放行（体检 P2-2） */
+    fun hasQuantityConstraint(userText: String): Boolean =
+        quantified.containsMatchIn(userText.replace(Regex("\\s+"), ""))
+
     /** 否定词出现在开放式短语之前 = 用户不是要挂机（"不要刷视频了，回来"） */
     private val negation = Regex("不要|别再?|禁止|避免|不得")
 

@@ -64,8 +64,11 @@ object PopupGuard {
         if (Regex("更新|升级|下载|安装", RegexOption.IGNORE_CASE).containsMatchIn(taskText)) return null
         if (isRewardPlaybackPage(normalized)) return null
         val reason = popupReason(normalized) ?: return null
-        // visibleButtons 已按语义打分过滤并去重排序，第一个就是最明确的退出控件
-        val close = ExitMemory.visibleButtons(screenDump).firstOrNull()?.label ?: return null
+        // visibleButtons 按语义打分排序，但 500 分档含「返回/退出/放弃类」——那不是弹窗关闭按钮，
+        // 误判到正常页面时会变成系统反复替用户按返回（体检 P1-2 / P1-10 同族）。只认 400 分档
+        // （关闭/跳过/取消/以后再说/我知道了），真弹窗几乎必有；没有就交还模型，绝不硬关。
+        val close = ExitMemory.visibleButtons(screenDump)
+            .firstOrNull { it.score in 300..499 }?.label ?: return null
         return PopupPlan(close, reason)
     }
 }

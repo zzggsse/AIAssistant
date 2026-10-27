@@ -14,7 +14,10 @@ object PageGuard {
 
     data class RewardCompletionExit(
         val evidence: String,
-        val closeLabel: String?
+        val closeLabel: String?,
+        /** 命中行在 dump 里的 0-999 坐标：glyph/无名关闭控件必须按坐标直点，见 isGlyphCloseQuery */
+        val x: Int? = null,
+        val y: Int? = null
     )
 
     private val rewardCompletionEvidence = Regex(
@@ -39,8 +42,9 @@ object PageGuard {
 
     fun isLiveIntentTask(task: String): Boolean {
         val text = normalize(task)
-        if (Regex("不要|别|禁止|避免|不得").containsMatchIn(text)) {
-            val before = text.substringBefore(Regex("不要|别|禁止|避免|不得").find(text)!!.value)
+        // 「别」不能裸用——「特别想看直播」会被当成否定句（体检 P3-10）
+        if (Regex("不要|(?<!特)别再?|禁止|避免|不得").containsMatchIn(text)) {
+            val before = text.substringBefore(Regex("不要|(?<!特)别再?|禁止|避免|不得").find(text)!!.value)
             return Regex("直播|开播|主播").containsMatchIn(before)
         }
         return Regex("看直播|进入直播间|去直播间|开直播|直播收益").containsMatchIn(text)
@@ -48,11 +52,17 @@ object PageGuard {
 
     fun isLiveRoom(screenDump: String): Boolean {
         val text = normalize(screenDump)
-        val strong = Regex("直播间|直播中|正在直播|直播回放|连麦|更多直播|直播广场").findAll(text).any()
+        val strong = Regex("直播间|直播中|正在直播|直播回放|连麦").findAll(text).any()
         val interactive = Regex(
-            "退出直播间|离开直播间|退出直播|关闭直播|更多直播|说点什么|送礼物|赠送礼物|加入粉丝团|点亮灯牌|礼物面板|抽大奖"
+            "退出直播间|离开直播间|退出直播|关闭直播|更多直播|直播广场|说点什么|送礼物|赠送礼物|加入粉丝团|点亮灯牌|礼物面板|抽大奖"
         ).findAll(text).any()
-        return explicitLiveExit(text) != null || (strong && interactive)
+        if (explicitLiveExit(text) != null) return true
+        if (!interactive) return false
+        // strong 词缺席时，「更多直播/直播广场/抽大奖」这类入口词单独出现不足以判直播间：
+        // 任务中心同样有这些入口词，单词命中会反复强退正常页面（体检追加轮 P1-7），
+        // 必须同时有直播间特有的互动特征（评论框/送礼/粉丝团/礼物面板）
+        val liveOnlyFeature = Regex("说点什么|送礼物|赠送礼物|加入粉丝团|点亮灯牌|礼物面板").containsMatchIn(text)
+        return strong || liveOnlyFeature
     }
 
     fun isUnintendedLiveRoom(task: String, screenDump: String): Boolean =
@@ -242,12 +252,20 @@ object PageGuard {
             .map(::specificVerbsIn)
             .filter { it.isNotEmpty() }
 
+
     /** 通用关闭控件：语义文字优先，截图上的无文字 X 用右上角区域兜底。 */
     fun isDismissControl(label: String, nx: Int, ny: Int): Boolean {
-        if (Regex("关闭|跳过|以后再说|我知道了|放弃奖励|残忍离开|[×✕]").containsMatchIn(normalize(label))) {
+        val text = normalize(label)
+        // 语义词只认短标签（≤6字）。「关闭广告并领取奖励」这类长文案是转化按钮，不能因含「关闭」放行（体检 P2-8）
+        if (text.length <= 6 &&
+            Regex("关闭|跳过|以后再说|我知道了|放弃奖励|残忍离开").containsMatchIn(text)
+        ) {
             return true
         }
-        return label.isBlank() && nx in 830..999 && ny in 30..650
+        // 「×」必须整标签就是符号：「金币×100」含 × 但不是关闭控件（体检 P2-8）
+        if (Regex("^[×✕✖⨯Xx]$").containsMatchIn(text)) return true
+        // 右上角空白兜底：真弹窗的 X 几乎不会低于屏幕 1/3，ny 收到 320 防止误中右缘点赞栏（体检 P2-8）
+        return (text.isBlank() || text == "无文字元素") && nx in 830..999 && ny in 30..320
     }
 
     /**
@@ -255,17 +273,30 @@ object PageGuard {
      * 「任务中心/去赚钱/钱包」是奖励任务的路由，不属于另一种玩法。
      */
     fun isOffMissionTap(task: String, label: String, context: String = ""): Boolean {
-        val taskVerbs = specificVerbsIn(taskTextForMission(task))
-        val taskHasReward = rewardOutcome.containsMatchIn(taskTextForMission(task))
-        if (taskVerbs.isEmpty() && !taskHasReward) return false
+        val taskVerbsFull = verbsIn(taskTextForMission(task))
+        val taskVerbs = taskVerbsFull - connectorVerbs
+        // 任务只点了奖励结果、没点名玩法（taskVerbs 为空）时不做动词锚定：
+        // 那类任务交给 isUnsafeRewardTap/isSpendActionTap 的通用红线，否则任何动词入口都被一刀切拦掉（体检 P2-1）
+        if (taskVerbs.isEmpty()) return false
         if (isRewardRouteTap(task, label)) return false
 
         val labelVerbs = verbsIn(label)
         if (labelVerbs.isNotEmpty()) {
-            if (labelVerbs.intersect(taskVerbs).isEmpty()) return true
-            if (context.isBlank()) return false
-            return specificContextVerbs(context)
-                .any { it.isNotEmpty() && it.intersect(taskVerbs).isEmpty() }
+            val labelSpecific = labelVerbs - connectorVerbs
+            if (labelSpecific.isNotEmpty()) {
+                if (labelSpecific.intersect(taskVerbs).isEmpty()) return true
+                if (context.isBlank()) return false
+                val segments = specificContextVerbs(context).filter { it.isNotEmpty() }
+                if (segments.isEmpty()) return false
+                val aligned = segments.filter { it.intersect(taskVerbs).isNotEmpty() }
+                // 标签本身与任务对齐时：语境全是其他玩法 → 拦；有对齐也有冲突（奖励卡常见的
+                // 「邀请好友再得XX」混杂副标）→ 放行，连坐误拦是 v1.11.x 反复返工的主因（体检 P2-7）
+                return aligned.isEmpty()
+            }
+            // 标签只有连接动词（「立即参与/去参加」）：任务点名了参与类动作（「参加抽奖」）时
+            // 这就是目的地；任务没点名（「看广告赚金币」点「立即参与」= 投币活动入口）则拦截。
+            // 两侧对称处理连接动词，老逻辑只剥任务侧会误拦「参加抽奖→立即参与」（体检 P2-1）
+            return !taskVerbsFull.contains("参与")
         }
 
         val segmentVerbs = specificContextVerbs(context)
@@ -372,6 +403,16 @@ object PageGuard {
     }
 
     /**
+     * closeLabel 是单个关闭符号或「无文字元素」占位时，clickText 的全树 contains 匹配
+     * 会误中「金币×100」这类节点——必须用 RewardCompletionExit.x/y 按坐标直点（体检 P1-8）。
+     */
+    fun isGlyphCloseQuery(label: String?): Boolean {
+        if (label.isNullOrBlank()) return false
+        val t = label.trim()
+        return t == "无文字元素" || Regex("^[×✕✖⨯Xx]$").containsMatchIn(t)
+    }
+
+    /**
      * Find a close control that shares the reward-result context. The X is frequently a tiny
      * image or a generic container, so matching the completion phrase is required before using
      * row geometry. This deliberately does not return the ad CTA just because it also mentions
@@ -395,7 +436,7 @@ object PageGuard {
             closeGlyphRows
                 .filter { (_, x, y) -> isSameRewardRow(anchor.second, anchor.third, x, y) }
                 .minByOrNull { (_, x, y) -> abs(x - anchor.second) + abs(y - anchor.third) }
-                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first), row.second, row.third) }
         }
 
         for (anchor in anchors) {
@@ -406,12 +447,12 @@ object PageGuard {
                         x - anchor.second <= 650
                 }
                 .minByOrNull { (_, x, y) -> abs(x - anchor.second) + abs(y - anchor.third) }
-                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first), row.second, row.third) }
         }
 
         // Some SDKs merge the result and X into one accessibility label.
         anchors.firstOrNull { (label, _, _) -> rewardCloseGlyph.containsMatchIn(label) }
-            ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+            ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first), row.second, row.third) }
 
         // Text-labeled close/dismiss controls near the result remain the generic fallback.
         val closeRows = rows.filter { (label, _, _) ->
@@ -422,11 +463,11 @@ object PageGuard {
             closeRows
                 .filter { (_, x, y) -> isNearRewardResult(anchor.second, anchor.third, x, y) }
                 .minByOrNull { (_, x, y) -> abs(x - anchor.second) + abs(y - anchor.third) }
-                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first)) }
+                ?.let { row -> return RewardCompletionExit(evidence, queryFor(row.first), row.second, row.third) }
         }
         if (anchors.isEmpty()) {
             closeGlyphRows.firstOrNull()?.let { row ->
-                return RewardCompletionExit(evidence, queryFor(row.first))
+                return RewardCompletionExit(evidence, queryFor(row.first), row.second, row.third)
             }
         }
         return RewardCompletionExit(evidence, null)
@@ -448,14 +489,20 @@ object PageGuard {
         return signals.count { screenDump.contains(it) } >= 2
     }
 
-    private fun isCommerceTask(task: String): Boolean {
+    /**
+     * 任务本身是购物/消费类时，支付与商品页是正当目的地。
+     * 主循环商品页守卫、isForbiddenPayment、AgentEngine isNonShoppingTask 统一走这里，
+     * 词表必须一致——历史上三处各写一份、漏了「买」，导致「买杯奶茶」被反复按返回（体检 P1-6）。
+     */
+    fun isCommerceTask(task: String): Boolean {
         val text = normalize(task)
-        if (Regex("不要|别|禁止|避免|不得").containsMatchIn(text)) {
-            val marker = Regex("不要|别|禁止|避免|不得").find(text)?.value.orEmpty()
+        val commerceWords = Regex("充值|支付|下单|购买|付款|抢购|购物|买")
+        if (Regex("不要|(?<!特)别再?|禁止|避免|不得").containsMatchIn(text)) {
+            val marker = Regex("不要|(?<!特)别再?|禁止|避免|不得").find(text)?.value.orEmpty()
             val before = text.substringBefore(marker, "")
-            return Regex("充值|支付|下单|购买|付款|抢购|购物").containsMatchIn(before)
+            return commerceWords.containsMatchIn(before)
         }
-        return Regex("充值|支付|下单|购买|付款|抢购|购物").containsMatchIn(text)
+        return commerceWords.containsMatchIn(text)
     }
 
     private fun explicitLiveExit(text: String): String? = listOf(

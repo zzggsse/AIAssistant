@@ -726,16 +726,34 @@ object AgentEngine {
         Regex("(?:再看|还需|等待|倒计时)(\\d{1,3})秒").find(text)?.let { match ->
             return match.groupValues[1].toIntOrNull()?.takeIf { it > 0 }
         }
-        Regex("(\\d{1,3})分(\\d{1,2})秒").find(text)?.let { match ->
-            val minutes = match.groupValues[1].toIntOrNull() ?: return null
-            val seconds = match.groupValues[2].toIntOrNull() ?: return null
-            return (minutes * 60 + seconds).takeIf { it > 0 }
-        }
+        // 「X分Y秒」与 M:SS 兜底同规：必须带倒计时语境词。视频时长「3分45秒」没有语境
+        // 就不算奖励倒计时，否则假倒计时会触发强制 Wait 劫持，还会连带让直播间/下载墙
+        // 守卫在等待期间集体让路（体检 P2-3 同族）
+        Regex("(\\d{1,3})分(\\d{1,2})秒").findAll(text)
+            .mapNotNull { match ->
+                val minutes = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+                val seconds = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                val start = (match.range.first - 30).coerceAtLeast(0)
+                val end = (match.range.last + 5).coerceAtMost(text.length)
+                val nearby = text.substring(start, end)
+                val hasContext = Regex("再看|还需|等待|倒计时|剩|后可|后领|后得").containsMatchIn(nearby)
+                if (!hasContext) null else minutes * 60 + seconds
+            }
+            .maxOrNull()
+            ?.takeIf { it > 0 }
+            ?.let { return it }
+        // 通用 M:SS 兜底必须带倒计时语境词：视频时长「12:34」、页顶时钟「10:08」、闪购「00:30」
+        // 都会被误读成奖励倒计时，触发强制 Wait 劫持（体检 P2-3）。
+        // 窗口放宽到前30字符：「等倒计时结束再来吧~…最高20000金币 15:43」这类语境词离得较远（既有用例）
         return Regex("(?<!\\d)(\\d{1,3}):(\\d{2})(?!\\d)").findAll(text)
             .mapNotNull { match ->
                 val minutes = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
                 val seconds = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
-                minutes * 60 + seconds
+                val start = (match.range.first - 30).coerceAtLeast(0)
+                val end = (match.range.last + 5).coerceAtMost(text.length)
+                val nearby = text.substring(start, end)
+                val hasContext = Regex("再看|还需|等待|倒计时|剩|后可|后领|后得").containsMatchIn(nearby)
+                if (!hasContext) null else minutes * 60 + seconds
             }
             .maxOrNull()
             ?.takeIf { it > 0 }
@@ -812,21 +830,30 @@ object AgentEngine {
         realH: Int,
         userTask: String = "",
         screenDump: String? = null,
-        allowedApp: Pair<String, String>? = null
+        allowedApp: Pair<String, String>? = null,
+        rewardCountdownSeconds: Int? = null
     ): AglmResult {
         val actions = parseAutoGlmActions(answer)
-        if (actions.isEmpty()) return execSingleAutoGLM(a, answer, realW, realH, userTask, screenDump, allowedApp)
+        if (actions.isEmpty()) return execSingleAutoGLM(
+            a, answer, realW, realH, userTask, screenDump, allowedApp, rewardCountdownSeconds
+        )
         if (actions.size == 1) {
-            return execSingleAutoGLM(a, actions.first(), realW, realH, userTask, screenDump, allowedApp)
+            return execSingleAutoGLM(
+                a, actions.first(), realW, realH, userTask, screenDump, allowedApp, rewardCountdownSeconds
+            )
         }
         if (!actions.all(::batchActionAllowed)) {
-            return execSingleAutoGLM(a, actions.first(), realW, realH, userTask, screenDump, allowedApp)
+            return execSingleAutoGLM(
+                a, actions.first(), realW, realH, userTask, screenDump, allowedApp, rewardCountdownSeconds
+            )
         }
 
         val infos = ArrayList<String>()
         for ((index, action) in actions.withIndex()) {
             val beforeFingerprint = AssistantAccessibilityService.instance?.currentPageFingerprint()?.first
-            val result = execSingleAutoGLM(a, action, realW, realH, userTask, screenDump, allowedApp)
+            val result = execSingleAutoGLM(
+                a, action, realW, realH, userTask, screenDump, allowedApp, rewardCountdownSeconds
+            )
             infos.add("${index + 1}/${actions.size}: ${result.info}")
             if (result.finished) return AglmResult(infos.joinToString("\n"), true, result.message, settled = true)
             if (result.message == "__PARSE_FAIL__" || result.message == "__JUMP_BLOCK__" ||
@@ -846,10 +873,14 @@ object AgentEngine {
         realH: Int,
         userTask: String = "",
         screenDump: String? = null,
-        allowedApp: Pair<String, String>? = null
+        allowedApp: Pair<String, String>? = null,
+        rewardCountdownSeconds: Int? = null
     ): AglmResult {
         val svc = AssistantAccessibilityService.instance
+        // 999 归一化坐标映射时钳到 total-1：999*total/999 = total 会落在屏幕外一像素，
+        // 读侧（labelAtNormalized/contextTextNear）必须用同一公式同步钳制（体检 P3-2）
         fun norm(v: Int, total: Int) = ((v.coerceIn(0, 999) / 999.0) * total)
+            .coerceIn(0.0, (total - 1).toDouble())
         // 前置断言防止前缀碰撞：text=" 不能匹配到 context="/hint_text="，app=" 不能匹配到 package="
         fun str(k: String): String? = Regex("(?<![A-Za-z_])$k=\"((?:[^\"\\\\]|\\\\.)*)\"").find(answer)?.groupValues?.get(1)
         fun pt(k: String): Pair<Int, Int>? = Regex("(?<![A-Za-z_])$k=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer)?.let {
@@ -933,7 +964,9 @@ object AgentEngine {
                 val taskWantsJump = Regex("更新|升级|下载|安装", RegexOption.IGNORE_CASE)
                     .containsMatchIn(userTask)
                 val normalizedPage = screenDump.orEmpty().replace(Regex("\\s+"), "")
-                if (PageGuard.isUnintendedLiveRoom(userTask, normalizedPage)) {
+                // 激励广告倒计时活跃时，广告素材本身常带直播引流/下载条/抽奖文案：
+                // 三个页面级强退守卫都必须让路，否则会把已看时长作废（体检 P1-1/P2-4，与主循环 :2002 对齐）
+                if (rewardCountdownSeconds == null && PageGuard.isUnintendedLiveRoom(userTask, normalizedPage)) {
                     val exitLabel = PageGuard.liveRoomExitLabel(screenDump.orEmpty())
                     val info = when {
                         exitLabel != null && svc?.clickText(exitLabel)?.startsWith("已") == true ->
@@ -945,7 +978,8 @@ object AgentEngine {
                     return AglmResult(info, false)
                 }
                 // 📵 下载墙：会自动触发APK下载/安装的广告页，绝不停留（与主循环守卫对齐，兜住批量动作间隙）
-                if (!taskWantsJump && PageGuard.isDownloadWall(normalizedPage)) {
+                // 激励广告倒计时活跃时例外：广告底部的下载条不该触发强退（体检 P1-1）
+                if (!taskWantsJump && rewardCountdownSeconds == null && PageGuard.isDownloadWall(normalizedPage)) {
                     val exitLabel = PageGuard.safeAdExitLabel(screenDump.orEmpty())
                     val info = when {
                         exitLabel != null && svc?.clickText(exitLabel)?.startsWith("已") == true ->
@@ -957,7 +991,11 @@ object AgentEngine {
                     return AglmResult(info, false, "__JUMP_BLOCK__")
                 }
                 // 🎰 奖励任务误入投币/抽奖活动页：可能消耗金币，立即退出（与主循环守卫对齐）
-                if (PageGuard.isRewardTask(userTask) && PageGuard.isRewardActivityPage(normalizedPage, userTask)) {
+                // 倒计时活跃时例外：广告素材里的抽奖文案不构成「误入活动页」（体检 P1-1）
+                if (rewardCountdownSeconds == null &&
+                    PageGuard.isRewardTask(userTask) &&
+                    PageGuard.isRewardActivityPage(normalizedPage, userTask)
+                ) {
                     val info = if (svc?.pressBack() == true) "已按返回退出投币/抽奖类活动页" else DeviceTools.NO_A11Y
                     android.util.Log.i("AIButler", "Blocked Tap in reward activity page")
                     return AglmResult(info, false, "__JUMP_BLOCK__")
@@ -979,7 +1017,8 @@ object AgentEngine {
                 val isExplicitDismiss =
                     isDismissIntent(answer) &&
                         PageGuard.isDismissControl(nearbyLabel, p.first, p.second)
-                val isNonShoppingTask = !Regex("下单|购买|支付|抢购|购物|买").containsMatchIn(userTask)
+                // 购物任务豁免统一走 PageGuard.isCommerceTask（词表与主循环/isForbiddenPayment 一致，体检 P1-6）
+                val isNonShoppingTask = !PageGuard.isCommerceTask(userTask)
                 if (str("message") == "重要操作") AglmResult("⚠️ 敏感操作已跳过（涉及支付/隐私，请你手动处理）", false)
                 else if (isCommercePage && isNonShoppingTask) {
                     android.util.Log.i("AIButler", "Blocked Tap on commerce page")
@@ -992,7 +1031,11 @@ object AgentEngine {
                 else if (!targetAppMatched && !taskWantsJump && jumpPattern.containsMatchIn(nearbyLabel)) {
                     AglmResult("🛑 已拦截疑似跳转其他应用：${nearbyLabel.take(100)}", false, "__JUMP_BLOCK__")
                 }
-                else if (!isExplicitDismiss && PageGuard.isSpendActionTap(userTask, nearbyLabel, cardContext)) {
+                // 消费/送礼拦截只针对奖励任务（v1.11.9 的本意）；普通任务「查话费余额」「充话费」
+                // 点「余额查询/话费充值」是正当操作，不能拦（体检追加轮 P2-11）
+                else if (!isExplicitDismiss && PageGuard.isRewardTask(userTask) &&
+                    PageGuard.isSpendActionTap(userTask, nearbyLabel, cardContext)
+                ) {
                     android.util.Log.i(
                         "AIButler",
                         "Blocked spend/action tap: task=$userTask label=$nearbyLabel context=$cardContext"
@@ -1228,7 +1271,7 @@ object AgentEngine {
             val maxDistance = if (candidate.second >= 100000) 250000 else 5000
             candidate.second >= 40 && candidate.third <= maxDistance &&
                 !(!PageGuard.hasMissionVerbs(userTask) && PageGuard.isUnsafeRewardTap(userTask, candidate.first.first)) &&
-                !PageGuard.isSpendActionTap(userTask, candidate.first.first) &&
+                !(PageGuard.isRewardTask(userTask) && PageGuard.isSpendActionTap(userTask, candidate.first.first)) &&
                 !(PageGuard.hasMissionVerbs(userTask) && PageGuard.isOffMissionTap(userTask, candidate.first.first))
         }
         val target = scored.maxWithOrNull(compareBy({ it.second }, { -it.third }))?.first ?: return modelPoint!!

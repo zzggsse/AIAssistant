@@ -28,7 +28,10 @@ object EvalLogger {
             if (file.length() > MAX_BYTES) {
                 val old = File(dir, "$FILE.old")
                 old.delete()
-                file.renameTo(old)
+                // rename 失败不能静默：否则当前文件无限增长，8MB 上限失效（体检 P3-8）
+                if (!file.renameTo(old)) {
+                    android.util.Log.w("AIButler", "评测日志轮转失败，继续写入当前文件")
+                }
             }
             entry.addProperty("ts", System.currentTimeMillis())
             file.appendText(entry.toString() + "\n")

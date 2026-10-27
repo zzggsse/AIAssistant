@@ -157,13 +157,14 @@ object Prefs {
     fun ensureAutoGlmDefault(c: Context) {
         val sp = get(c)
         if (sp.getBoolean(AUTO_GLM_DEFAULT_MIGRATION, false)) return
-        sp.edit().putBoolean(AUTO_GLM_DEFAULT_MIGRATION, true).apply()
+        // 标记与实际迁移必须同一笔提交：分两笔写，中间被杀会"标记已落、迁移没做"，永久跳过（体检 P3-7）
+        val editor = sp.edit().putBoolean(AUTO_GLM_DEFAULT_MIGRATION, true)
         if (vendorId(c) == "zhipu" && model(c) == "glm-4.5-flash") {
-            sp.edit()
+            editor
                 .putString("model", "autoglm-phone")
                 .putBoolean("autoGlm", true)
-                .apply()
         }
+        editor.apply()
     }
 
     fun pin(c: Context): String {
@@ -180,17 +181,24 @@ object Prefs {
     }
 
     fun setPin(c: Context, v: String) {
-        get(c).edit().putString(KEY_PIN, SecureStore.encrypt(v)).remove(KEY_PIN_LEGACY).apply()
+        val enc = SecureStore.encrypt(v)
+        // encrypt 失败返回 ""（Keystore 故障）：绝不能把加密键写成空串又删掉明文键，
+        // 否则 PIN 静默丢失——与 pin() 读取迁移的防护保持一致（体检 P2-5）
+        if (enc.isBlank()) return
+        get(c).edit().putString(KEY_PIN, enc).remove(KEY_PIN_LEGACY).apply()
     }
 
     fun save(c: Context, vendorId: String, baseUrl: String, model: String, apiKey: String) {
-        sp(c).edit()
+        val editor = sp(c).edit()
             .putString("vendorId", vendorId)
             .putString("baseUrl", baseUrl)
             .putString("model", model)
-            .putString(KEY_API_KEY, SecureStore.encrypt(apiKey))
-            .remove(KEY_API_KEY_LEGACY)
-            .apply()
+        val enc = SecureStore.encrypt(apiKey)
+        if (enc.isNotBlank()) {
+            editor.putString(KEY_API_KEY, enc).remove(KEY_API_KEY_LEGACY)
+        }
+        // encrypt 失败时不覆盖旧加密值、不删 legacy 明文键，下次读取迁移再试（体检 P2-5）
+        editor.apply()
     }
 
     fun vendorId(c: Context) = sp(c).getString("vendorId", "") ?: ""

@@ -1286,4 +1286,144 @@ class AgentLogicTest {
         assertTrue("连续换动作但页面不变必须熔断", noProgress >= AgentEngine.PROGRESS_STALL_ABORT_AT)
         assertEquals(0, if (AgentEngine.isNoProgressRound(pageChanged = true)) 1 else 0)
     }
+
+    // ========== 体检修复回归（2026-10-26 第三轮 + 追加轮） ==========
+
+    @Test
+    fun 页面防护_更多直播单词不再误判直播间() {
+        // 任务中心：直播广场入口 + 抽大奖活动卡。单词命中就强退会反复打断正常任务（体检追加轮 P1-7）
+        val taskCenter = "当前应用: com.any.app\n" +
+            "页面内容: 任务中心 签到 邀请好友 直播广场 抽大奖\n" +
+            "可点击: 去直播广场 [500,300]\n" +
+            "可点击: 抽大奖 [500,500]"
+        assertFalse(PageGuard.isLiveRoom(taskCenter))
+        // 只有「更多直播」胶囊、无直播间互动特征的信息流同样不判
+        val feed = "当前应用: com.any.app\n页面内容: 关注 推荐 更多直播\n可点击: 更多直播 [500,80]"
+        assertFalse(PageGuard.isLiveRoom(feed))
+        // 直播间特有互动特征（说点什么/礼物面板）仍可识别（v1.11.10 真机用例形态）
+        val live = "当前应用: com.any.app\n" +
+            "页面内容: 关注 2917观看 更多直播 说点什么\n" +
+            "可点击: 无文字元素 [936,75]\n" +
+            "可点击: 底部栏礼物面板按钮 [699,912]"
+        assertTrue(PageGuard.isLiveRoom(live))
+    }
+
+    @Test
+    fun 页面防护_参加抽奖任务的立即参与放行() {
+        // 连接动词两侧对称：任务点名参与类动作时「立即参与」是目的地（体检 P2-1）
+        assertFalse(PageGuard.isOffMissionTap("去参加幸运抽奖", "立即参与"))
+        // 任务没点名参与时，「立即参与」对广告任务仍是投币/报名路线，保持拦截
+        assertTrue(PageGuard.isOffMissionTap("看广告赚金币", "立即参与"))
+    }
+
+    @Test
+    fun 页面防护_对齐入口的多段混杂语境放行() {
+        // 奖励卡副标常见「邀请好友再得XX」，多段混杂不再连坐拦截（体检 P2-7）
+        assertFalse(PageGuard.isOffMissionTap("看广告赚金币", "去观看", "看广告得金币 / 邀请好友得18888"))
+        // 语境整体指向单一其他玩法时仍拦截
+        assertTrue(PageGuard.isOffMissionTap("看广告赚金币", "去观看", "幸运抽奖 转盘赢大奖"))
+    }
+
+    @Test
+    fun 页面防护_关闭控件语义只认短标签() {
+        // 「×」必须整标签就是符号；「金币×100」是权益文案不是关闭控件（体检 P2-8）
+        assertFalse(PageGuard.isDismissControl("金币×100", 500, 500))
+        assertTrue(PageGuard.isDismissControl("×", 900, 60))
+        // 长文案含「关闭」是转化按钮（体检 P2-8）
+        assertFalse(PageGuard.isDismissControl("关闭广告并领取奖励", 500, 500))
+        // 空白标签右上兜底收紧到屏幕上 1/3（体检 P2-8）
+        assertTrue(PageGuard.isDismissControl("", 908, 100))
+        assertFalse(PageGuard.isDismissControl("", 908, 500))
+    }
+
+    @Test
+    fun 购物任务词表三处统一() {
+        // 「买」字购物任务不被商品页/支付页守卫打回（体检 P1-6）
+        assertTrue(PageGuard.isCommerceTask("帮我买杯奶茶"))
+        assertTrue(PageGuard.isCommerceTask("在淘宝下单买一箱牛奶"))
+        assertFalse(PageGuard.isCommerceTask("刷视频赚金币"))
+        assertFalse(PageGuard.isCommerceTask("不要支付，只看免费广告"))
+    }
+
+    @Test
+    fun 奖励倒计时_无语境的时分秒不误报() {
+        // 视频时长/页顶时钟不再被当成奖励倒计时（体检 P2-3）
+        assertNull(AgentEngine.rewardCountdownSeconds("看广告赚金币 视频时长 03:45"))
+        assertNull(AgentEngine.rewardCountdownSeconds("金币收益页 10:08"))
+        // 带语境词的照常识别
+        assertEquals(205, AgentEngine.rewardCountdownSeconds("看广告奖励 还需03:25"))
+    }
+
+    @Test
+    fun 奖励完成层_glyph标签带坐标供直点() {
+        // ×/无文字元素类 closeLabel 走坐标直点，不走 clickText 全树匹配（体检追加轮 P1-8）
+        val dump = "当前应用: com.any.app\n" +
+            "页面内容: 已成功领取 金币×100\n" +
+            "可点击: 已成功领取奖励 [500,120]\n" +
+            "可点击: 无文字元素 [930,110]"
+        val exit = PageGuard.rewardCompletionExit(dump)
+        assertNotNull(exit)
+        assertEquals("已成功领取", exit!!.evidence)
+        assertEquals("无文字元素", exit.closeLabel)
+        assertTrue(PageGuard.isGlyphCloseQuery(exit.closeLabel))
+        assertEquals(930, exit.x)
+        assertEquals(110, exit.y)
+    }
+
+    @Test
+    fun 弹窗代点_只认关闭档不认返回() {
+        // 「返回」是 500 分档：弱特征误判到正常页面时不能替用户按返回（体检 P1-2）
+        val settingsPage = "当前应用: com.any.app\n" +
+            "页面内容: 消息通知 系统通知 消息通知设置\n" +
+            "可点击: 返回 [80,90]\n" +
+            "可点击: 消息通知 [500,300]"
+        assertNull(PopupGuard.plan("查看消息设置", settingsPage))
+        // 真弹窗有 400 分档关闭控件时照常代点
+        val popup = "当前应用: com.any.app\n" +
+            "页面内容: 发现新版本 优化体验\n" +
+            "可点击: 立即更新 [500,420]\n" +
+            "可点击: 以后再说 [500,560]"
+        assertEquals("以后再说", PopupGuard.plan("帮我刷金币", popup)?.closeLabel)
+    }
+
+    @Test
+    fun 任务分类_数量限定的广告任务有终点() {
+        // 「看一个广告」不被当成循环型任务无限拒绝 finish（体检 P2-2）
+        assertTrue(TaskCompletionVerifier.hasQuantityConstraint("看一个广告"))
+        assertTrue(TaskCompletionVerifier.hasQuantityConstraint("刷10条视频"))
+        assertFalse(TaskCompletionVerifier.hasQuantityConstraint("看广告赚金币"))
+    }
+
+    @Test
+    fun 直播间意图_特别不当成否定() {
+        // 「特别想看直播」不是否定句（体检 P3-10）
+        assertTrue(PageGuard.isLiveIntentTask("特别想看直播"))
+        assertFalse(PageGuard.isLiveIntentTask("看广告赚金币"))
+    }
+
+    @Test
+    fun 奖励倒计时_X分Y秒无语境不误报() {
+        // 视频时长「3分45秒」与「03:45」同族：无倒计时语境词不能触发强制等待（体检 P2-3 同族）
+        assertNull(AgentEngine.rewardCountdownSeconds("金币任务页 本集视频时长 3分45秒"))
+        // 带语境词的照常识别
+        assertEquals(205, AgentEngine.rewardCountdownSeconds("金币任务 还需3分25秒后领"))
+    }
+
+    @Test
+    fun 倒计时参数透传_动作层页面守卫让路() {
+        // rewardCountdownSeconds 必须从主循环穿透 execAutoGLM 到 execSingleAutoGLM，
+        // 否则激励广告播放中批量动作间隙仍会被下载墙守卫强退（体检 P1-1 回归）
+        val dump = "当前应用: com.any.ad.app\n" +
+            "页面内容: 金币奖励 下载并体验 立即下载\n" +
+            "可点击: 关闭 [500,500]"
+        val blocked = AgentEngine.execAutoGLM(
+            null, "do(action=\"Tap\", element=[500,500])", 1080, 2400, "看广告赚金币", dump
+        )
+        assertEquals("__JUMP_BLOCK__", blocked.message)
+        val yielded = AgentEngine.execAutoGLM(
+            null, "do(action=\"Tap\", element=[500,500])", 1080, 2400, "看广告赚金币", dump,
+            rewardCountdownSeconds = 120
+        )
+        assertNull("倒计时活跃时下载墙守卫必须让路", yielded.message)
+    }
 }

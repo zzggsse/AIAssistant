@@ -45,6 +45,9 @@ class CaptureService : Service() {
         var active = false
             private set
 
+        // 服务实例引用：stopAll 释放投屏后要连带停掉前台服务与常驻通知（体检 P1-5）
+        @Volatile private var instanceRef: CaptureService? = null
+
         fun isActive(): Boolean = active && reader != null
 
         fun start(context: Context, resultCode: Int, data: Intent) {
@@ -130,6 +133,17 @@ class CaptureService : Service() {
         private val stateLock = Any()
 
         fun stopAll() = synchronized(stateLock) {
+            releaseProjectionLocked()
+            // 用户关闭"屏幕视觉"后必须停掉前台服务并撤掉常驻通知：
+            // 否则「屏幕视觉已开启」通知常驻、服务继续以前台优先级保活耗电（体检 P1-5）
+            instanceRef?.let { svc ->
+                try { svc.stopForeground(Service.STOP_FOREGROUND_REMOVE) } catch (_: Exception) { }
+                try { svc.stopSelf() } catch (_: Exception) { }
+            }
+        }
+
+        /** 释放投屏资源（调用方必须已持有 stateLock）；不停服务本身，供二次初始化复用 */
+        private fun releaseProjectionLocked() {
             try { vdisplay?.release() } catch (e: Exception) { }
             try { projection?.stop() } catch (e: Exception) { }
             try { reader?.close() } catch (e: Exception) { }
@@ -190,6 +204,9 @@ class CaptureService : Service() {
         try {
             // 与 stopAll 互斥：防止上一轮投屏的停止回调在本轮初始化中途把资源拆掉
             synchronized(stateLock) {
+                // 二次初始化前先释放上一会话资源：快速连续两次授权时直接覆盖字段，
+                // 旧 VirtualDisplay/Projection/HandlerThread 会泄漏并继续刷过期帧（体检 P2-9）
+                releaseProjectionLocked()
                 val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 projection = mpm.getMediaProjection(code, data)
                 projection?.registerCallback(object : MediaProjection.Callback() {
@@ -223,7 +240,13 @@ class CaptureService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        instanceRef = this
+    }
+
     override fun onDestroy() {
+        instanceRef = null
         stopAll()
         super.onDestroy()
     }
