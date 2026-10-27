@@ -18,6 +18,8 @@ captures/
 
 *.log
 *.tmp
+__pycache__/
+*.py[cod]
 *.png
 !app/src/main/**/*.png
 /*.xml

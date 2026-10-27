@@ -164,6 +164,7 @@ flowchart TD
 | `一键增量部署.bat` | 编译 → adb 重装 → 自动恢复无障碍授权 → 启动 |
 | `一键测试.bat` | 运行本地逻辑回归测试（不需要手机） |
 | `一键抓日志.bat` | 抓取真机完整 logcat + 崩溃缓冲区到 `_tmp/` |
+| `tools/code_harness.py` | AI 改码护栏：检查版本、安全红线、调试产物并运行编译/单测 |
 
 单元测试位于 `app/src/test/`（`AgentLogicTest`、`TaskCompletionVerifierTest`、`VisualFeatureLogicTest` 等 7 个测试类），全部本地运行，不依赖手机。
 
