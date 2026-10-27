@@ -20,7 +20,13 @@ import java.util.Locale
 
 object VisualSampleListDialog {
 
+    // 删除/重命名后的刷新是重新 show 一个新对话框：不先关旧的话会层层堆叠，
+    // 下层还是带旧数据的列表，点得到「清空全部」等旧按钮（体检第五轮 C2）
+    private var currentDialog: AlertDialog? = null
+
     fun show(activity: AppCompatActivity, onAddNew: () -> Unit = {}) {
+        currentDialog?.dismiss()
+        currentDialog = null
         val library = VisualFeatureLibrary(activity)
         val samples = library.all().sortedByDescending { it.createdAt }
         val container = LinearLayout(activity).apply {
@@ -66,6 +72,7 @@ object VisualSampleListDialog {
                 .setPositiveButton("清空") { _, _ ->
                     library.clear()
                     Toast.makeText(activity, "已清空", Toast.LENGTH_SHORT).show()
+                    show(activity, onAddNew)
                 }
                 .show()
         }, rowWeight(activity))
@@ -73,11 +80,16 @@ object VisualSampleListDialog {
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(activity, 10) })
 
-        AlertDialog.Builder(activity)
+        currentDialog = AlertDialog.Builder(activity)
             .setTitle("图形样本库")
             .setView(container)
             .setNegativeButton("关闭", null)
             .show()
+            .also {
+                // 用户点「关闭」/返回键 dismiss 后清掉静态引用：currentDialog 是 object 级字段，
+                // 不清会连着整个 activity 泄漏到下一次 show（体检第六轮 P3-1）
+                it.setOnDismissListener { currentDialog = null }
+            }
     }
 
     private fun sampleRow(

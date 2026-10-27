@@ -1,5 +1,7 @@
 package com.aibutler.app
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -298,6 +300,76 @@ class AgentLogicTest {
             dump
         )
         assertEquals(TaskGoalVerifier.Status.CONFIRMED, result.status)
+    }
+
+    // ========== 屏幕校验：小数目标 × 滚轮档位（体检第六轮 P3-4） ==========
+
+    @Test
+    fun 屏幕校验_小数目标滚轮最近整数档位不再卡死() {
+        // 目标 2.5 杯，滚轮只有整数档且已到 3（round(2.5)=3）：老写法字符串比对 "2"!="2.5" 永久 BLOCKED
+        val dump = "关键元素(坐标0-999):\n可滑动: 3杯 {NumberPicker} [200,300]"
+        val result = TaskGoalVerifier.check(
+            TaskGoalVerifier.parse("今天喝 2.5 杯水"),
+            dump
+        )
+        assertEquals(TaskGoalVerifier.Status.NEEDS_EVIDENCE, result.status)
+    }
+
+    @Test
+    fun 屏幕校验_小数目标滚轮差一档仍拦截() {
+        val dump = "关键元素(坐标0-999):\n可滑动: 2杯 {NumberPicker} [200,300]"
+        val result = TaskGoalVerifier.check(
+            TaskGoalVerifier.parse("今天喝 2.5 杯水"),
+            dump
+        )
+        assertEquals(TaskGoalVerifier.Status.BLOCKED, result.status)
+        assertTrue(result.detail.contains("2杯"))
+    }
+
+    @Test
+    fun 屏幕校验_滚轮本身显示小数时按原值比对() {
+        // 滚轮标签就带小数（"2.5杯"）：老解析 \\d+ 截成 2 再字符串比对会误拦
+        val dump = "关键元素(坐标0-999):\n可滑动: 2.5杯 {NumberPicker} [200,300]"
+        val result = TaskGoalVerifier.check(
+            TaskGoalVerifier.parse("今天喝 2.5 杯水"),
+            dump
+        )
+        assertEquals(TaskGoalVerifier.Status.NEEDS_EVIDENCE, result.status)
+    }
+
+    // ========== 历史压缩（体检第六轮 P3-3） ==========
+
+    @Test
+    fun 历史压缩_轮次全保留时工具截断仍生效() {
+        // 构造「总量超预算但 70% 窗口装得下全部轮次」的形态：pinned（system+首尾 user）占大头。
+        // 老实现压缩结果与原历史同长 → 调用方按 size 相同跳过回填 → 三层截断作用在副本上整段白算
+        val history = JsonArray()
+        history.add(JsonObject().apply {
+            addProperty("role", "system"); addProperty("content", "s".repeat(1500))
+        })
+        history.add(JsonObject().apply {
+            addProperty("role", "user"); addProperty("content", "u".repeat(10))
+        })
+        repeat(5) {
+            history.add(JsonObject().apply {
+                addProperty("role", "assistant")
+                add("tool_calls", JsonArray().apply {
+                    add(JsonObject().apply {
+                        add("function", JsonObject().apply { addProperty("arguments", "a".repeat(10)) })
+                    })
+                })
+            })
+            history.add(JsonObject().apply {
+                addProperty("role", "tool"); addProperty("content", "x".repeat(650))
+            })
+        }
+        history.add(JsonObject().apply {
+            addProperty("role", "user"); addProperty("content", "l".repeat(1500))
+        })
+        val compressed = ContextCompressor.compress(history, 5000)
+        assertEquals("轮次应全部保留（size 与原历史相同）", history.size(), compressed.size())
+        val oldestTool = compressed.get(3).asJsonObject.get("content").asString
+        assertTrue("最旧工具结果应被头尾截断: ${oldestTool.take(30)}", oldestTool.contains("（中间已省略）"))
     }
 
     @Test
@@ -1425,5 +1497,17 @@ class AgentLogicTest {
             rewardCountdownSeconds = 120
         )
         assertNull("倒计时活跃时下载墙守卫必须让路", yielded.message)
+    }
+
+    @Test
+    fun 动作拆分_参数引号内的do不算动作边界() {
+        // 单动作：text 里的字面 "do(" 不拆分，整条原样保留（体检第四轮 P3-1）
+        val single = "do(action=\"Type\", text=\"点击do(按钮\")"
+        assertEquals(1, AgentEngine.parseAutoGlmActions(single).size)
+        // 批量：第一段 text 含 "do(" 时不得从字符串中间切断，两段都完整
+        val batch = "do(action=\"Type\", text=\"说do(x\")\ndo(action=\"Tap\", element=[500,500])"
+        val actions = AgentEngine.parseAutoGlmActions(batch)
+        assertEquals(2, actions.size)
+        assertEquals("do(action=\"Type\", text=\"说do(x\")", actions[0])
     }
 }

@@ -22,8 +22,15 @@ object NativeTaskRouter {
         val createsAlarm = Regex(
             "(?:设|设置|设定|定|创建|新建|添加|加).{0,12}(?:闹钟|闹铃)|" +
                 "(?:闹钟|闹铃).{0,6}(?:设|设置|定)"
-        ).containsMatchIn(text)
-        if (!createsAlarm) return null
+        )
+        // 便签内容里提到闹钟（「记个便签：记得设置闹钟每天7点」）时意图是记内容：
+        // 分发顺序闹钟在前（TaskRouter.parseNativeDirect），不在这里让路会真的去设闹钟而不是记便签（体检第五轮 B2）
+        val noteMarker = Regex("便签|备忘|记一下|记个").find(text)
+        val alarmMatch = createsAlarm.find(text)
+        if (noteMarker != null && (alarmMatch == null || noteMarker.range.first < alarmMatch.range.first)) {
+            return null
+        }
+        if (alarmMatch == null) return null
 
         val time = TaskGoalVerifier.parseTime(text) ?: return null
         val label = Regex("(?:备注|标签|名字|名称)(?:叫|是|为|[:：])?\\s*([^，。,.!！?？]{1,30})")

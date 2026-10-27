@@ -125,18 +125,40 @@ object ConversationStore {
             if (conversation.messages.isEmpty()) conversation.title = "新对话"
         }
         cached = state
-        persist(context, state)
+        val persistSucceeded = persist(context, state)
+        // 旧 chat_history.jsonl 已并入 conversations.json：迁移源清理，不再永久占盘。
+        // 只有本次新存储真实写入成功才删；失败时保留旧文件，下一次启动还能迁移。
+        if (persistSucceeded) ChatHistoryStore.deleteLegacyFile(context)
         return state
     }
 
-    private fun persist(context: Context, state: Snapshot) {
+    /** 会话数量上限：conversations.json 是全量重写式持久化，无上限会无限膨胀
+     *  （PathMemory/TaskCardMemory/ExitMemory 都有 30/120 条上限，体检第六轮 P3-4） */
+    private const val MAX_CONVERSATIONS = 50
+
+    private fun persist(context: Context, state: Snapshot): Boolean {
         cached = state
-        runCatching {
+        trimToCap(state)
+        return runCatching {
             AtomicFiles.write(file(context), gson.toJson(state))
         }.onFailure { e ->
             // 写盘失败（磁盘满等）不能静默：用户以为已保存，实际一重启就丢
             CrashLogger.log("ConversationStore", "会话持久化失败：${e.message}", e)
+        }.isSuccess
+    }
+
+    /** 超限时按 updatedAt 留最近 N 个；当前会话若掉出保留集，挤掉保留集里最旧的一个（当前会话永不丢） */
+    private fun trimToCap(state: Snapshot) {
+        if (state.conversations.size <= MAX_CONVERSATIONS) return
+        val keep = state.conversations.sortedByDescending { it.updatedAt }
+            .take(MAX_CONVERSATIONS)
+            .toMutableList()
+        if (keep.none { it.id == state.currentId }) {
+            val current = state.conversations.firstOrNull { it.id == state.currentId }
+            if (current != null) keep[keep.size - 1] = current
         }
+        state.conversations.clear()
+        state.conversations.addAll(keep)
     }
 
     private fun newConversation() = Conversation(

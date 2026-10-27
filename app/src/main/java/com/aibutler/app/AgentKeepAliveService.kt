@@ -30,6 +30,12 @@ class AgentKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            // START_STICKY 系统重启（任务中进程被杀后拉起）：任务早已死掉，唯一能关掉
+            // "正在执行任务…"通知的路径本来是用户重开 App；这里直接退场，避免僵尸前台服务（体检第五轮 C5）
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val chId = "agent_alive"
         nm.createNotificationChannel(

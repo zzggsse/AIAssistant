@@ -1394,16 +1394,41 @@ class MainActivity : AppCompatActivity() {
                 finalReply = "恢复任务时出错：${e.message}"; break
             }
             ctx.add(JsonObject().apply { addProperty("role", "assistant"); addProperty("content", reply.content) })
-            val actions = AgentEngine.parseAutoGlmActions(reply.content)
-            if (actions.isEmpty()) {
+            // 恢复链必须走主循环同一条执行通道 execAutoGLM（含直播间/下载墙/弹窗/消费守卫、批量中止与 settle）。
+            // 旧 execSingleAglmAction 按旧协议解析（startsWith("Tap") + point=），对 parseAutoGlmActions 返回的
+            // do(...) 全格式（element= 坐标）永远不命中，动作被静默丢弃，「继续」后画面永不变、空转到轮次上限
+            // 白烧 token（体检第六轮 P1）。
+            // 注：PausedTask 不带激励倒计时快照，恢复时按无倒计时处理——暂停通常以分钟计，原倒计时大概率已过期
+            val svcResume = AssistantAccessibilityService.instance
+            val (rw, rh) = svcResume?.realScreenSize() ?: Pair(1080, 1920)
+            val guardDump = svcResume?.dumpScreenForAutoGLM()
+            val res = AgentEngine.execAutoGLM(
+                this, reply.content, rw, rh, saved.userText, guardDump, saved.aglmGuessedApp,
+                rewardCountdownSeconds = null
+            )
+            if (res.finished) {
+                finalReply = res.info.ifBlank { "任务完成" }
+                break
+            }
+            if (res.message == "__PARSE_FAIL__") {
                 finalReply = reply.content.ifBlank { "任务完成" }
                 break
             }
-            for (action in actions) {
-                if (cancelRequested) break
-                execSingleAglmAction(action, ctx)
-                Thread.sleep(800)
+            if (res.message == "__PRIVACY_BLOCK__") {
+                // 恢复链与主循环同一条安全规则：隐私同意不代点，也不把哨兵当作普通执行结果
+                // 回给模型继续重试；停下来交给用户手动确认。
+                runOnUiThread {
+                    adapter.add(ChatAdapter.Msg("system", res.info))
+                    rv.scrollToPosition(adapter.items.size - 1)
+                }
+                finalReply = "🛑 检测到隐私条款/用户协议同意按钮。出于安全考虑，系统不会自动点击此类按钮，需要您手动确认后重试。"
+                break
             }
+            // 执行结果回填给模型（与主循环 Bug#1a 对齐）；拦截/代退哨兵的 info 已如实说明被拦或已代退
+            ctx.add(JsonObject().apply {
+                addProperty("role", "user")
+                addProperty("content", "执行结果：${res.info.take(200)}")
+            })
         }
         if (cancelRequested) {
             pausedTask = saved.copy(aglmCtx = ctx)
@@ -1416,29 +1441,6 @@ class MainActivity : AppCompatActivity() {
                 adapter.add(ChatAdapter.Msg("assistant", finalReply!!))
                 rv.scrollToPosition(adapter.items.size - 1)
             }
-        }
-    }
-
-    private fun execSingleAglmAction(action: String, ctx: JsonArray) {
-        val svc = AssistantAccessibilityService.instance ?: return
-        val (w, h) = svc.realScreenSize()
-        fun norm(v: Int, total: Int) = ((v.coerceIn(0, 999) / 999.0) * total).toFloat()
-        fun str(k: String) = Regex("$k=\"((?:[^\"\\\\]|\\\\.)*)\"").find(action)?.groupValues?.get(1) ?: ""
-        fun pt(k: String) = Regex("$k=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(action)?.let {
-            norm(it.groupValues[1].toInt(), w) to norm(it.groupValues[2].toInt(), h)
-        }
-        when {
-            action.startsWith("Tap") || action.startsWith("Click") -> pt("point")?.let { (x, y) ->
-                svc.tap(x, y)
-            }
-            action.startsWith("Swipe") -> {
-                val p1 = pt("start"); val p2 = pt("end")
-                if (p1 != null && p2 != null) svc.swipePts(p1.first, p1.second, p2.first, p2.second)
-            }
-            action.startsWith("Type") || action.startsWith("Input") -> svc.inputText(str("text"))
-            action.startsWith("Back") -> svc.pressBack()
-            action.startsWith("Home") -> svc.home()
-            action.startsWith("Wait") -> Thread.sleep(2000)
         }
     }
 
@@ -1477,6 +1479,7 @@ class MainActivity : AppCompatActivity() {
             var sameTapCount = 0
             var lastTapBucket = ""
             var lastTapLabel = ""
+            var lastSwipeSig = ""
             var sameLaunchCount = 0
             var lastLaunchApp = ""
             var lastActionSig = ""
@@ -1535,6 +1538,7 @@ class MainActivity : AppCompatActivity() {
             var lastActionFeedback = ""    // 上一轮「动作→页面变化」反馈，注入下一轮 screenInfo 后清空
             var jumpBlockStreak = 0        // 连续跳转/下载类拦截次数：模型反复撞同一拦截时升级处理
             var progressHoldRounds = 0
+            var visionProgressWaitRounds = 0   // 「屏幕进度未完」强制等待轮数：无上限会反复把领取 Tap 改写成 Wait（体检第六轮 P3-2）
             val visitedPackages = LinkedHashSet<String>()
             val pageTrace = LinkedHashSet<String>()
             val actionTrace = LinkedHashSet<String>()
@@ -2490,10 +2494,13 @@ class MainActivity : AppCompatActivity() {
                         )
                     })
                 }
+                // 只认屏幕上的真实进度信号，不认模型 raw 文本：模型写「倒计时已结束，点领取」也会命中
+                // 旧正则（倒计时|计时|进度 无数字要求），把领取 Tap 改写成 Wait（体检第六轮 P3-2）。
+                // 全部模式要求带数字，裸「倒计时/计时/进度」一律去掉
                 val visionProgressHint = Regex(
-                    "倒计时|再看\\s*\\d+|还需\\s*\\d+|\\d+\\s*秒后|计时|进度",
+                    "再看\\s*\\d+|还需\\s*\\d+|\\d+\\s*秒后|倒计时\\s*\\d+|剩余\\s*\\d+\\s*秒",
                     RegexOption.IGNORE_CASE
-                ).containsMatchIn(raw)
+                ).containsMatchIn(screenDump)
                 if (screenDump.contains("页面可能仍在加载") && !answer.contains("Wait") && loadingWaitCount < 3) {
                     loadingWaitCount++
                     android.util.Log.i("AIButler", "AGLM forced loading wait")
@@ -2560,14 +2567,17 @@ class MainActivity : AppCompatActivity() {
                 if (visionProgressHint && rewardWaitRounds == 0 && !frozenPage &&
                     !passiveVideoTask &&
                     Regex("金币|积分|奖励|收益|赚钱").containsMatchIn(userText) &&
-                    answer.contains("Tap")
+                    answer.contains("Tap") && visionProgressWaitRounds < 10
                 ) {
+                    visionProgressWaitRounds++
                     answer = "do(action=\"Wait\", duration=\"10 seconds\")"
                     android.util.Log.i("AIButler", "AGLM forced visual progress wait")
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg("system", "⏳ AI 看到任务进度还没完成，先等待"))
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
+                } else if (!visionProgressHint || rewardWaitRounds != 0) {
+                    visionProgressWaitRounds = 0
                 }
                 if (progressHoldRounds > 0 && !frozenPage &&
                     !passiveVideoTask &&
@@ -2922,7 +2932,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 // 录制：执行+稳定后取目标页面指纹，追加到路径链
-                if (preActionFp != null && !res.finished && res.message != "__PARSE_FAIL__" &&
+                // 录制守卫：拦截哨兵（__JUMP/COMMERCE/POPUP/PRIVACY_BLOCK__、__PARSE_FAIL__）一律不入路径——
+                // 这些轮要么没执行动作，要么执行的是系统替换的动作（如弹窗代点），
+                // 老写法只查 🛑/⚠️ 前缀，哨兵字符串混过守卫被存成"已验证"步骤，
+                // 回放时 PathMemory 裸 tap 无任何否决层（体检第五轮 A2/B1）
+                if (preActionFp != null && !res.finished &&
+                    (res.message == null || !res.message.startsWith("__")) &&
                     !res.message?.startsWith("🛑").let { it == true } && !res.message?.startsWith("⚠️").let { it == true }) {
                     val postActionFp = AssistantAccessibilityService.instance?.currentPageFingerprint()
                     val parsed = recParsed
@@ -3012,6 +3027,16 @@ class MainActivity : AppCompatActivity() {
                     })
                     continue
                 }
+                if (res.message == "__PRIVACY_BLOCK__") {
+                    // 隐私条款同意按钮被安全层拦截：模型不知道被拦，不告诉它会反复撞同一拦截。
+                    // 隐私同意属于用户手动确认事项，永远不代点——让模型请求用户自行操作
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", res.info))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    finalReply = "🛑 检测到隐私条款/用户协议同意按钮。出于安全考虑，系统不会自动点击此类按钮，需要您手动确认后重试。"
+                    break
+                }
                 if (res.finished) {
                     finalReply = res.message ?: "任务完成"
                     break
@@ -3052,6 +3077,10 @@ class MainActivity : AppCompatActivity() {
                 // 防点死磕：连续3次提示换目标，连续6次熔断；不重置计数
                 val tapM = Regex("Tap[^\\]]*element=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer)
                 prevTapCoords = if (tapM != null) Pair(tapM.groupValues[1].toInt(), tapM.groupValues[2].toInt()) else null
+                // Bug#10b：Swipe 也要纳入防空转计数。
+                // 老写法把滑动的重复判断挂在 tap 的 bucket 上，且非 tap 轮先清空再比较，计数恒为 1、整段失效
+                // （体检第五轮 A1）。现在滑动用独立签名（s_ 前缀 + 同款 15 桶），与点击共用同一套自愈/熔断阶梯
+                val swipeM = Regex("Swipe[^\\]]*start=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer)
                 if (tapM != null) {
                     val bucket = "${tapM.groupValues[1].toInt() / 15}_${tapM.groupValues[2].toInt() / 15}"
                     val tapLabel = Regex("已点击屏幕\\([^)]*\\)→([^\\n]+)").find(res.info)?.groupValues?.get(1)?.trim()
@@ -3059,10 +3088,13 @@ class MainActivity : AppCompatActivity() {
                     if (repeated) sameTapCount++ else { sameTapCount = 1 }
                     lastTapBucket = bucket
                     lastTapLabel = tapLabel.orEmpty()
-                } else {
+                    lastSwipeSig = ""
+                } else if (swipeM == null) {
+                    // Back/Home/Wait/Type 等其他动作：动作类型变了才清零（滑动轮不再误清 tap 计数）
                     sameTapCount = 0
                     lastTapBucket = ""
                     lastTapLabel = ""
+                    lastSwipeSig = ""
                 }
                 // Bug#1c：Launch 同一应用连续3次且未进入目标包名 = 目标不存在或无法启动，终止
                 val launchM = Regex("do\\s*\\(\\s*action\\s*=\\s*\"Launch\"\\s*,\\s*app\\s*=\\s*\"([^\"]+)\"").find(answer)
@@ -3075,24 +3107,27 @@ class MainActivity : AppCompatActivity() {
                     lastLaunchApp = ""
                 }
                 if (sameLaunchCount >= 3) {
-                    val targetReached = targetAppPackage != null &&
-                        AssistantAccessibilityService.instance?.currentPackage() == targetAppPackage
+                    // 目标包名是路由猜的：路由没猜中时不能拿它判"未进入"——用被启动应用自己的包名核对
+                    // （unguided 模式 targetAppPackage 为 null，老写法会把已成功打开的应用误判失败，体检第五轮 A3）
+                    val launchedPkg = DeviceTools.resolveApp(this, lastLaunchApp)?.second
+                    val targetReached = (targetAppPackage ?: launchedPkg)?.let { target ->
+                        AssistantAccessibilityService.instance?.currentPackage() == target
+                    } == true
                     if (!targetReached) {
                         finalReply = "连续3次启动「$lastLaunchApp」仍未进入该应用。该应用可能不存在或无法打开，任务已自动停止。"
                         android.util.Log.i("AIButler", "AGLM sameLaunchCount breaker fired: app=$lastLaunchApp count=$sameLaunchCount")
                         break
                     }
                 }
-                // Bug#10b：Swipe 也要纳入防空转计数
-                val swipeM = Regex("Swipe[^\\]]*start=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer)
+                // Bug#10b：Swipe 计数收尾（swipeM 复用上面新块的声明：这里再写一遍 val 会同作用域
+                // 重复声明直接编译冲突——体检第六轮 P0；tap空/swipe非null 的情形由这里计数）
                 if (tapM == null && swipeM != null) {
-                    val swipeSig = "${swipeM.groupValues[1]}_${swipeM.groupValues[2]}"
-                    val swipeRepeated = swipeSig == lastTapBucket
-                    if (swipeRepeated) sameTapCount++ else { sameTapCount = 1 }
-                    lastTapBucket = swipeSig
+                    val swipeSig = "s_${swipeM.groupValues[1].toInt() / 15}_${swipeM.groupValues[2].toInt() / 15}"
+                    if (swipeSig == lastSwipeSig) sameTapCount++ else { sameTapCount = 1 }
+                    lastSwipeSig = swipeSig
                 }
                 if (sameTapCount >= 6) {
-                    finalReply = "连续6次点击同一坐标都没有推进任务，已自动停止。请手动确认目标入口后重试。"
+                    finalReply = "连续6次重复同一动作都没有推进任务，已自动停止。请手动确认目标入口后重试。"
                     break
                 }
                 if (sameTapCount == 4) {

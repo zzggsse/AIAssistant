@@ -67,6 +67,9 @@ class NotificationCatcher : NotificationListenerService() {
             .ifBlank { ex.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: "" }
         if (title.isBlank() && text.isBlank()) return
         if (sbn.packageName == packageName) return
+        // 常驻/进度类通知（下载进度、音乐播放、导航）每秒刷新一次，不过滤会把 100 条缓存
+        // 几分钟刷满，真实消息通知被挤掉（体检第五轮 B4）
+        if (sbn.isOngoing) return
 
         val app = try {
             packageManager.getApplicationLabel(

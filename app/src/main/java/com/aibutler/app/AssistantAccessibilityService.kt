@@ -1399,10 +1399,16 @@ class AssistantAccessibilityService : AccessibilityService() {
         }
         val rect = Rect()
         node.getBoundsInScreen(rect)
-        // 坐标兜底前校验可见性：与 clickText 的兜底一致，点屏外节点会谎报成功（体检追加轮 P2-10）
+        // 坐标兜底前校验可见性：与 clickText 的兜底一致，点屏外节点会谎报成功（体检追加轮 P2-10）。
+        // 只用 intersects 挡不住 1px 露边的半露节点（中心在屏外，手势被系统裁剪落空仍报成功）——
+        // 中心点必须在屏内（体检第六轮 P3-3）
         val screen = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
-        if (rect.isEmpty || !Rect.intersects(rect, screen)) return "「$query」位置异常，已跳过点击"
-        return if (tap(rect.exactCenterX(), rect.exactCenterY())) "已用坐标点击「$query」" else "点击动作发送失败"
+        val cx = rect.exactCenterX()
+        val cy = rect.exactCenterY()
+        val onScreen = !rect.isEmpty && Rect.intersects(rect, screen) &&
+            cx >= 0 && cx <= screen.width() && cy >= 0 && cy <= screen.height()
+        if (!onScreen) return "「$query」位置异常，已跳过点击"
+        return if (tap(cx, cy)) "已用坐标点击「$query」" else "点击动作发送失败"
     }
 
     private fun nodeLabel(n: AccessibilityNodeInfo): String =
@@ -1452,7 +1458,13 @@ class AssistantAccessibilityService : AccessibilityService() {
         n.getBoundsInScreen(r)
         val screen = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
         if (r.isEmpty || !Rect.intersects(r, screen)) return "目标元素当前不在屏幕可见范围内，已跳过点击"
-        tap(r.exactCenterX(), r.exactCenterY())
+        // 同上：intersects 之外还要求中心在屏内，1px 露边的轮播半露 item 不再谎报"已用坐标点击"（体检第六轮 P3-3）
+        val fcx = r.exactCenterX()
+        val fcy = r.exactCenterY()
+        if (fcx < 0 || fcx > screen.width() || fcy < 0 || fcy > screen.height()) {
+            return "目标元素当前不在屏幕可见范围内，已跳过点击"
+        }
+        tap(fcx, fcy)
         return "已用坐标点击「$query」"
     }
 

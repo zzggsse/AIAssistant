@@ -22,6 +22,9 @@ object SecureStore {
     private const val IV_BYTES = 12
     private const val TAG_BITS = 128
 
+    // 加锁：check-then-generate 并发时两线程各生成一把同别名密钥，AndroidKeyStore 后者覆盖前者，
+    // 拿着第一把密钥落盘的密文从此解不开（表现为 API Key/PIN 莫名丢失，体检第五轮 B7）
+    @Synchronized
     private fun secretKey(): SecretKey {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         (ks.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }

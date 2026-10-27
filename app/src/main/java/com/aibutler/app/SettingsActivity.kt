@@ -88,12 +88,20 @@ class SettingsActivity : AppCompatActivity() {
         etApiKey.setText(Prefs.apiKey(this))
         bindPasswordToggle(etApiKey, findViewById(R.id.toggleApiKey))
         loading = false
-        applyVendorUi(savedIndex)
+        // 只套用厂商下拉/提示文案，不回填默认 baseUrl/model——否则刚载入的已保存自定义配置
+        // 会被冲掉，用户改个 PIN 点保存就把自定义配置永久覆盖成厂商默认（体检第五轮 C1）
+        applyVendorUi(savedIndex, fillDefaults = false)
 
+        // Android Spinner 注册 listener 后首次 layout 会异步回调一次 onItemSelected（setSelection(pos,false)
+        // 挡不住），彼时 loading 已为 false，仅靠 loading 挡不住这次"假切换"，自定义配置照样被冲掉
+        // （体检第六轮 P2）。再按"已套用厂商"去重：回调报告的 position 与当前厂商相同就不是用户主动切换
+        var appliedVendorIndex = savedIndex
         spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
-                if (loading) return
-                applyVendorUi(position)
+                if (loading || position == appliedVendorIndex) return
+                // 用户主动切换厂商：这才应该用新厂商的默认端点/模型填输入框
+                appliedVendorIndex = position
+                applyVendorUi(position, fillDefaults = true)
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
@@ -325,10 +333,12 @@ class SettingsActivity : AppCompatActivity() {
         llDeveloperPanelLayout.addView(btnViewLog)
     }
 
-    private fun applyVendorUi(position: Int) {
+    private fun applyVendorUi(position: Int, fillDefaults: Boolean) {
         val v = Vendors.list.getOrNull(position) ?: return
-        etBaseUrl.setText(v.baseUrl)
-        etModel.setText(v.model)
+        if (fillDefaults) {
+            etBaseUrl.setText(v.baseUrl)
+            etModel.setText(v.model)
+        }
         etModel.setAdapter(ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, v.models))
         etModel.setOnClickListener { if (v.models.isNotEmpty()) etModel.showDropDown() }
         tvKeyHint.text = v.keyHint

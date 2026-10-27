@@ -566,9 +566,27 @@ object AgentEngine {
     fun parseAutoGlmActions(answer: String): List<String> {
         val raw = answer.trim()
         if (raw.isBlank()) return emptyList()
+        // 引号区间：动作参数字符串里可能出现字面 "do("（如 Type text="点do(按钮"），
+        // 不感知引号会把动作从字符串中间切开，前段成残缺动作、后段被丢弃（体检第四轮 P3-1）
+        val quoteRanges = ArrayList<IntRange>()
+        var scan = 0
+        while (scan < raw.length) {
+            if (raw[scan] == '"') {
+                val quoteStart = scan
+                scan++
+                while (scan < raw.length) {
+                    if (raw[scan] == '\\' && scan + 1 < raw.length) { scan += 2; continue }
+                    if (raw[scan] == '"') { scan++; break }
+                    scan++
+                }
+                quoteRanges.add(quoteStart until scan)
+            } else scan++
+        }
+        fun insideQuote(pos: Int) = quoteRanges.any { pos in it }
         val starts = Regex("(?s)(?:do\\s*\\(|finish\\s*\\()")
             .findAll(raw)
             .map { it.range.first }
+            .filter { !insideQuote(it) }
             .toList()
         if (starts.size <= 1) return listOf(raw)
 
@@ -857,8 +875,10 @@ object AgentEngine {
             infos.add("${index + 1}/${actions.size}: ${result.info}")
             if (result.finished) return AglmResult(infos.joinToString("\n"), true, result.message, settled = true)
             if (result.message == "__PARSE_FAIL__" || result.message == "__JUMP_BLOCK__" ||
-                result.message == "__COMMERCE_BLOCK__"
+                result.message == "__COMMERCE_BLOCK__" || result.message == "__POPUP_BLOCK__" ||
+                result.message == "__PRIVACY_BLOCK__"
             ) {
+                // 弹窗代点已经替换了本轮动作，剩余排队动作是按旧屏幕规划的，继续执行会点错（体检第四轮 P3-2）
                 return AglmResult(infos.joinToString("\n"), false, result.message, settled = true)
             }
             waitForActionSettle(action, beforeFingerprint)
@@ -975,7 +995,10 @@ object AgentEngine {
                         else -> DeviceTools.NO_A11Y
                     }
                     android.util.Log.i("AIButler", "Blocked Tap in unintended live room: $exitLabel")
-                    return AglmResult(info, false)
+                    // 必须带 __JUMP_BLOCK__ 哨兵，与下载墙/活动页守卫对齐（体检第六轮 P2）：
+                    // 批量循环只认哨兵中止，裸返回会让剩余排队动作按旧屏幕照旧执行；
+                    // 录制守卫只排 "__" 前缀与 🛑/⚠️，裸返回会把代退误记成"已验证 tap 步骤"，回放裸点旧坐标
+                    return AglmResult(info, false, "__JUMP_BLOCK__")
                 }
                 // 📵 下载墙：会自动触发APK下载/安装的广告页，绝不停留（与主循环守卫对齐，兜住批量动作间隙）
                 // 激励广告倒计时活跃时例外：广告底部的下载条不该触发强退（体检 P1-1）

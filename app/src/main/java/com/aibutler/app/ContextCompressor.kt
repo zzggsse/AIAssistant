@@ -99,6 +99,10 @@ object ContextCompressor {
             if (keep) result.add(history.get(i).deepCopy())
         }
 
+        // 轮次全部保留时 result 与 history 同长，调用方（compactHistory）按 size 相同跳过回填——
+        // 此时三层截断若只作用在 result 副本上就整段白算，旧工具结果保持全文反复重算
+        // （体检第六轮 P3-3）：该分支直接在原历史上截断并返回
+        if (result.size() == history.size()) return tieredToolTruncate(history)
         return tieredToolTruncate(result)
     }
 
