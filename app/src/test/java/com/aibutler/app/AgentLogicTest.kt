@@ -452,7 +452,7 @@ class AgentLogicTest {
         for (pkg in packages) {
             val dump = "当前应用: $pkg\n页面内容: 立即抢购 提交订单 商品详情\n可点击: 立即抢购 [500,300]"
             val r = exec("do(action=\"Tap\", element=[500,300])", task = "帮我刷金币", dump = dump)
-            assertEquals("包名 $pkg 未拦截商单页点击", "__COMMERCE_BLOCK__", r.message)
+            assertEquals("包名 $pkg 未拦截商单页点击", "__SENSITIVE_BLOCK__", r.message)
         }
     }
 
@@ -471,12 +471,18 @@ class AgentLogicTest {
     }
 
     @Test
-    fun tap_购物类任务不误伤商单点击() {
-        // 用户明确要买东西时，商单页不应拦截
+    fun tap_购物任务订单确认按钮仍然拦截() {
+        // 购物任务可以浏览商品，但订单确认属于用户手动动作
         val dump = "当前应用: com.sankuai.meituan\n页面内容: 提交订单\n可点击: 提交订单 [500,300]"
         val r = exec("do(action=\"Tap\", element=[500,300])", task = "帮我买一杯奶茶下单", dump = dump)
-        // 没有被拦截才会走到执行层（NO_A11Y）
-        assertEquals(DeviceTools.NO_A11Y, r.info)
+        assertEquals("__SENSITIVE_BLOCK__", r.message)
+    }
+
+    @Test
+    fun 工具红线_订单确认按钮主链路硬拦截() {
+        listOf("提交订单", "确认订单", "确认下单", "Place Order").forEach { label ->
+            assertTrue("主工具链未硬拦截：$label", AgentEngine.isSensitiveButton(label))
+        }
     }
 
     @Test
@@ -719,7 +725,22 @@ class AgentLogicTest {
 
         assertTrue(PageGuard.isPaymentOrOrderPage(dump))
         assertTrue(PageGuard.isForbiddenPayment("看广告刷金币", dump))
-        assertFalse(PageGuard.isForbiddenPayment("帮我下单购买", dump))
+        assertTrue(PageGuard.isForbiddenPayment("帮我下单购买", dump))
+    }
+
+    @Test
+    fun 页面防护_订单确认按钮任何购物措辞都不豁免() {
+        val labels = listOf("提交订单", "确认订单", "确认下单", "立即购买", "Place Order", "Confirm Order")
+        labels.forEach { label ->
+            assertTrue("订单确认按钮未硬拦截：$label", PageGuard.isSensitiveButton(label))
+            val dump = "当前应用: com.any.app\n页面内容: $label\n可点击: $label [500,300]"
+            assertTrue(
+                "订单确认页未硬拦截：$label",
+                PageGuard.isForbiddenPayment("帮我买奶茶并下单", dump)
+            )
+        }
+        assertFalse(PageGuard.isSensitiveButton("商品详情"))
+        assertFalse(PageGuard.isSensitiveButton("加入购物车"))
     }
 
     @Test

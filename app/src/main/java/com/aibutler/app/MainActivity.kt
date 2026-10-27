@@ -3037,6 +3037,14 @@ class MainActivity : AppCompatActivity() {
                     finalReply = "🛑 检测到隐私条款/用户协议同意按钮。出于安全考虑，系统不会自动点击此类按钮，需要您手动确认后重试。"
                     break
                 }
+                if (res.message == "__SENSITIVE_BLOCK__") {
+                    runOnUiThread {
+                        adapter.add(ChatAdapter.Msg("system", res.info))
+                        rv.scrollToPosition(adapter.items.size - 1)
+                    }
+                    finalReply = "🛑 这一步涉及付款、订单确认或验证码，系统已停止并交还给您手动确认。"
+                    break
+                }
                 if (res.finished) {
                     finalReply = res.message ?: "任务完成"
                     break

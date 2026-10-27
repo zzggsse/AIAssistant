@@ -35,13 +35,26 @@ FORBIDDEN_PATH_PATTERNS = (
     re.compile(r"(^|/)local\.properties$"),
 )
 SAFE_CLICK_PATTERN = re.compile(
-    r"(?:验证码|付款|转账|确认下单|确认支付|confirm[^;\n]{0,40}(?:payment|order))"
+    r"(?:验证码|付款|转账|提交订单|确认订单|确认下单|立即购买|立即抢购|"
+    r"confirm[^;\n]{0,40}(?:payment|order)|place[^;\n]{0,20}order)"
     r"[^;\n]{0,240}(?:performClick\s*\(|dispatchGesture\s*\(|input\s+tap|\.click\s*\()",
     re.IGNORECASE,
 )
 SECRET_VALUE_PATTERN = re.compile(
     r"(?i)(?:api[_-]?key|secret|token|password)[^\n]{0,40}"
     r"(?:sk-[A-Za-z0-9_-]{16,}|[A-Za-z0-9]{32,})"
+)
+ORDER_LABEL_TERMS = (
+    "提交订单", "确认订单", "确认下单", "立即购买", "立即抢购",
+    r"place.{0,4}order", r"confirm.{0,4}(?:payment|order)",
+    r"complete.{0,4}order", r"check.?out",
+)
+REQUIRED_PHONE_PROMPTS = (
+    "付款、转账、提交订单、确认订单、确认下单、验证码、输入密码等支付/订单确认类按钮绝不代替用户点击",
+    "提交订单、确认订单、确认下单的敏感步骤不要代替用户确认",
+)
+FORBIDDEN_ORDER_WAIVER = re.compile(
+    r"(?:提交订单|确认订单|确认下单)[^\n]{0,80}可以自动点击"
 )
 
 
@@ -95,6 +108,7 @@ class CodeHarness:
             "version": "versionCode must increase by exactly one and versionName must advance semantically",
             "core_regression": "AgentEngine, DeviceTools, or accessibility changes require a regression test",
             "safety_redline": "never automatically click payment, transfer, order, or verification-code controls",
+            "phone_safety_redline": "order confirmation controls stay manual even for shopping tasks",
             "generality": "automation rules must work for any app/page; app profiles must be data-driven",
             "forbidden_outputs": ["_tmp/", "测试结果/", "*.jks", "*.keystore", ".env", "local.properties"],
             "banned_apis": ["eval(", "exec(", "os.system(", "powershell -EncodedCommand"],
@@ -165,7 +179,10 @@ class CodeHarness:
             if not path.exists():
                 violations.append(f"{name}: deleted file still needs a safety/content review")
                 continue
-            content = path.read_text(encoding="utf-8", errors="replace")
+            additions = self._changed_lines(name)
+            content = "\n".join(additions) if additions else path.read_text(
+                encoding="utf-8", errors="replace"
+            )
             violations.extend(self.check_constraints(CodeChange(name, content)))
         return violations
 
@@ -288,6 +305,86 @@ class CodeHarness:
         ]
         return bool(tests_changed), {"core": core_changed, "tests": tests_changed}
 
+    @staticmethod
+    def _kotlin_function_block(source: str, function_name: str) -> str:
+        match = re.search(
+            rf"(?ms)^    (?:(?:private|internal)\s+)?fun\s+{re.escape(function_name)}\s*\("
+            r".*?(?=^    (?:private\s+)?fun\s|\Z)",
+            source,
+        )
+        return match.group(0) if match else ""
+
+    def _changed_lines(self, file_path):
+        diff = self._git("diff", "--unified=0", "--", file_path)
+        return [
+            line[1:] for line in diff.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+
+    def check_phone_safety_redline(self):
+        """Lock the mobile-agent order-confirmation invariant into the harness."""
+        agent_path = self.repo / "app/src/main/java/com/aibutler/app/AgentEngine.kt"
+        guard_path = self.repo / "app/src/main/java/com/aibutler/app/PageGuard.kt"
+        if not agent_path.exists() or not guard_path.exists():
+            return False, "mobile safety sources are missing"
+
+        agent_source = agent_path.read_text(encoding="utf-8", errors="replace")
+        guard_source = guard_path.read_text(encoding="utf-8", errors="replace")
+        missing_prompts = [text for text in REQUIRED_PHONE_PROMPTS if text not in agent_source]
+        prompt_ok = not missing_prompts and not FORBIDDEN_ORDER_WAIVER.search(agent_source)
+
+        label_block = self._kotlin_function_block(guard_source, "isSensitiveButton")
+        agent_label_block = self._kotlin_function_block(agent_source, "isSensitiveButton")
+        pattern_block = re.search(
+            r"private\s+val\s+sensitiveButtonPattern\s*=.*?(?=\n    fun\s)",
+            guard_source,
+            re.DOTALL,
+        )
+        pattern_source = pattern_block.group(0) if pattern_block else ""
+        lower_block = pattern_source.lower()
+        missing_terms = [
+            term for term in ORDER_LABEL_TERMS
+            if not re.search(re.escape(term.lower()), lower_block)
+        ]
+        pattern_used = "sensitiveButtonPattern.containsMatchIn" in label_block
+        agent_delegates = "PageGuard.isSensitiveButton(label)" in agent_label_block
+        auto_glm_uses_guard = "PageGuard.isSensitiveButton(nearbyLabel)" in agent_source
+        label_ok = (
+            bool(label_block) and bool(pattern_source) and pattern_used
+            and not missing_terms and agent_delegates and auto_glm_uses_guard
+        )
+
+        match = re.search(
+            r"fun\s+isForbiddenPayment\s*\(.*?(?=\n    (?:(?:private|internal)\s+)?fun\s|\Z)",
+            guard_source,
+            re.DOTALL,
+        )
+        forbidden_block = match.group(0) if match else ""
+        page_ok = (
+            bool(forbidden_block)
+            and "isPaymentOrOrderPage(screenDump)" in forbidden_block
+            and "!isCommerceTask(task)" not in forbidden_block
+        )
+
+        detail = {
+            "prompt": "order confirmation requires manual confirmation" if prompt_ok else {
+                "missing": missing_prompts,
+                "waiver_found": bool(FORBIDDEN_ORDER_WAIVER.search(agent_source)),
+            },
+            "labels": "shared sensitive-button list covers order terms" if label_ok else {
+                "block_found": bool(label_block),
+                "pattern_found": bool(pattern_source),
+                "pattern_used": pattern_used,
+                "agent_delegates": agent_delegates,
+                "auto_glm_uses_guard": auto_glm_uses_guard,
+                "missing_terms": missing_terms,
+            },
+            "page_guard": "commerce task cannot waive an order page" if page_ok else {
+                "block_found": bool(forbidden_block),
+            },
+        }
+        return prompt_ok and label_ok and page_ok, detail
+
     def evaluate(self, changed_files=None, run_verification=True):
         report = EvalReport()
         files = list(changed_files) if changed_files is not None else self.changed_files()
@@ -302,6 +399,7 @@ class CodeHarness:
         report.add("forbidden_paths", *self.check_forbidden_paths(files))
         report.add("core_regression", *self.check_core_regression(files))
         report.add("version", *self.check_version(files))
+        report.add("phone_safety", *self.check_phone_safety_redline())
 
         if run_verification:
             test_result = self.run_tests()

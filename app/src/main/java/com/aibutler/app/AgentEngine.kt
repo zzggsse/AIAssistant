@@ -356,7 +356,7 @@ object AgentEngine {
             7. 屏幕边缘红色圆形「停止任务」悬浮气泡（可能只露出一半）是用户手动叫停任务用的助手控件，不是页面内容：绝不要点击它，也不要把它当成目标元素。
 
             【安全红线】
-            - 付款、转账、验证码、输入密码等支付类按钮绝不代替用户点击；"提交订单""确认订单"可以自动点击（不扣钱），但到支付页面必须停下告诉用户"请你手动输入密码完成支付"。
+            - 付款、转账、提交订单、确认订单、确认下单、验证码、输入密码等支付/订单确认类按钮绝不代替用户点击；必须停在最后一步，告诉用户需要手动确认什么。
             - 广告要求下载/安装/试玩的入口绝不点击。
 
             【跨步骤数据记忆】
@@ -543,7 +543,7 @@ object AgentEngine {
             "8.1 【遮挡处理】被悬浮挂件挡住的目标一律按「不可见」处理。宝箱、红包、金币浮标、道具、悬浮球等挂件盖住入口时：先 Swipe 从屏幕中部滑动半屏让页面滚动，再重新观察；只有用户明确要求做赚钱/广告任务时，才可点击相关挂件或从「我/钱包/任务中心」等入口绕行；普通刷视频任务即使有金币奖励也绝不能点挂件。绝不反复点击被挡住的同一位置。\n" +
             "8.2 【滚轮/选择器通用规则】遇到时间、日期、数字、选项滚轮时，先从最新截图和关键元素里独立识别每一列/每一项的控件中心。Swipe 必须以目标控件自身的 X 坐标为准，上下小幅滑动；绝不跨到相邻列、页面中部或别的控件。每次滑动后重新读屏确认当前值；方向错了下一轮反向，改到与用户要求的精确值完全一致前不要点击保存/完成/确定。用户说「X点/X时」但没有指定分钟时，目标分钟是00。\n" +
             "10. 不要在首屏目标不可见时乱点猜测入口；也不要在任务入口已经可见时继续无意义滑动。动态视频/信息流不算页面推进，同一坐标绝不能反复点。\n" +
-            "11. 涉及登录、验证码、付款、转账、身份信息的敏感步骤不要代替用户确认，输出 Take_over 并说明需要手动完成什么。提交订单/确认订单可以自动点击（不扣钱），到支付页面再 Take_over。\n" +
+            "11. 涉及登录、验证码、付款、转账、身份信息、提交订单、确认订单、确认下单的敏感步骤不要代替用户确认，输出 Take_over 并说明需要手动完成什么。系统还会硬拦截这些按钮，任何任务措辞都不能豁免。\n" +
             "12. 每步之后检查页面是否按预期变化；没有变化就换元素、换入口、Back 或等待，绝不允许连续三次点同一个无效位置。\n" +
             "13. 输出动作前自查：是否已经浏览当前页？是否能下滑但还没看？这个动作是否可能离开目标应用？是让任务更接近目标，还是只是在重复？\n" +
             "14. 任何时候都必须输出动作：即使等待加载、播放或倒计时，也要用 do(action=\"Wait\", duration=\"x seconds\") 表示，绝不输出纯画面描述。\n" +
@@ -876,7 +876,7 @@ object AgentEngine {
             if (result.finished) return AglmResult(infos.joinToString("\n"), true, result.message, settled = true)
             if (result.message == "__PARSE_FAIL__" || result.message == "__JUMP_BLOCK__" ||
                 result.message == "__COMMERCE_BLOCK__" || result.message == "__POPUP_BLOCK__" ||
-                result.message == "__PRIVACY_BLOCK__"
+                result.message == "__PRIVACY_BLOCK__" || result.message == "__SENSITIVE_BLOCK__"
             ) {
                 // 弹窗代点已经替换了本轮动作，剩余排队动作是按旧屏幕规划的，继续执行会点错（体检第四轮 P3-2）
                 return AglmResult(infos.joinToString("\n"), false, result.message, settled = true)
@@ -1041,6 +1041,14 @@ object AgentEngine {
                     isDismissIntent(answer) &&
                         PageGuard.isDismissControl(nearbyLabel, p.first, p.second)
                 // 购物任务豁免统一走 PageGuard.isCommerceTask（词表与主循环/isForbiddenPayment 一致，体检 P1-6）
+                if (PageGuard.isSensitiveButton(nearbyLabel)) {
+                    android.util.Log.i("AIButler", "Blocked sensitive tap: $nearbyLabel")
+                    return AglmResult(
+                        "🛑 安全拦截：「${nearbyLabel.take(100)}」涉及付款/订单确认/验证，需要您手动确认。",
+                        false,
+                        "__SENSITIVE_BLOCK__"
+                    )
+                }
                 val isNonShoppingTask = !PageGuard.isCommerceTask(userTask)
                 if (str("message") == "重要操作") AglmResult("⚠️ 敏感操作已跳过（涉及支付/隐私，请你手动处理）", false)
                 else if (isCommercePage && isNonShoppingTask) {
@@ -1451,16 +1459,10 @@ object AgentEngine {
         return result
     }
 
-    /** 判断按钮文字是否涉及支付/验证等敏感操作（技术硬拦截；提交订单不拦截，AI可以点）。
+    /** 判断按钮文字是否涉及支付/订单确认/验证等敏感操作；统一走 PageGuard 词表。
      *  中英文关键词都要覆盖，防止英文 App 的支付按钮漏过拦截。 */
-    private fun isSensitiveButton(label: String): Boolean {
-        if (label.isBlank()) return false
-        return Regex(
-            "确认支付|立即支付|去支付|确认付款|立即付款|支付|付款|转账|验证码|输入密码|" +
-            "(?i)pay\\s*now|make.{0,4}payment|checkout|confirm.{0,4}payment|" +
-            "(?i)enter.{0,4}password|proceed.{0,8}(?:pay|check.?out)|transfer\\s*(?:money|fund)?|" +
-            "(?i)verify.{0,4}code|one.?time.(?:pass.?word|code)|otp"
-        ).containsMatchIn(label)
+    internal fun isSensitiveButton(label: String): Boolean {
+        return PageGuard.isSensitiveButton(label)
     }
 
     /** 执行大模型要求的工具，返回给大模型看的结果文字 */

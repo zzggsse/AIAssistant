@@ -28,6 +28,24 @@ class CodeHarnessTest(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("payment/order/verification", violations[0])
 
+    def test_constraints_block_order_confirmation_click(self):
+        violations = self.harness.check_constraints(CodeChange(
+            "app/src/main/java/com/aibutler/app/DeviceTools.kt",
+            "if (label == \"提交订单\") node.performClick()\n",
+        ))
+        self.assertEqual(len(violations), 1)
+        self.assertIn("payment/order/verification", violations[0])
+
+    def test_safe_guard_text_is_not_treated_as_a_click(self):
+        self.assertFalse(self.harness.check_constraints(CodeChange(
+            "app/src/main/java/com/aibutler/app/AgentEngine.kt",
+            "提示：提交订单必须 Take_over，交还给用户手动确认。\n",
+        )))
+
+    def test_phone_safety_redline_is_locked_in_current_sources(self):
+        passed, detail = self.harness.check_phone_safety_redline()
+        self.assertTrue(passed, detail)
+
     def test_semantic_version_accepts_each_allowed_step(self):
         self.assertTrue(CodeHarness._is_valid_semantic_step("1.12.4", "1.12.5"))
         self.assertTrue(CodeHarness._is_valid_semantic_step("1.12.4", "1.13.0"))
