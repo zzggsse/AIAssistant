@@ -81,13 +81,31 @@ object TaskGoalVerifier {
             val column = picker.columns.firstOrNull {
                 it.label.endsWith(target.unit)
             }
-            if (column != null && column.value != null && column.value.toString() != target.value) {
-                return Check(
-                    Status.BLOCKED,
-                    "选择器当前是 ${column.value}${target.unit}，目标必须是 ${target.display}"
-                )
+            if (column != null && column.value != null) {
+                // 数值化比对：value 是 Int（"2.5" 截成 2），老写法 "2" != "2.5" 字符串永不等 → 永久 BLOCKED
+                // 卡死到超时（体检第六轮 P3-4）。滚轮只有整数档位而目标带小数时，按四舍五入最接近档位算达成
+                val wheelText = column.valueText ?: column.value.toString()
+                val wheelNum = wheelText.toDoubleOrNull()
+                val wantedNum = target.value.toDoubleOrNull()
+                val wheelMatches = if (wheelNum != null && wantedNum != null) {
+                    wheelNum == wantedNum ||
+                        (wheelNum % 1.0 == 0.0 && wantedNum % 1.0 != 0.0 &&
+                            // kotlin.math.round 是银行家舍入（round(2.5)=2.0），这里需要四舍五入
+                            // 远离零：Math.round(2.5)=3、Math.round(-2.5)=-2（正数域等价于远离零）
+                            wheelNum == Math.round(wantedNum).toDouble())
+                } else {
+                    wheelText == target.value
+                }
+                if (!wheelMatches) {
+                    return Check(
+                        Status.BLOCKED,
+                        "选择器当前是 ${wheelText}${target.unit}，目标必须是 ${target.display}"
+                    )
+                }
+                // 滚轮已到目标值（含最近整数档）不算完成证据：滚轮 label 本身就是"2.5杯"，
+                // compactScreen.contains 会把滚轮自己的文本误判成"屏幕已看到目标值"→ 跳过让模型走保存
             }
-            if (compactScreen.contains(target.display)) {
+            else if (compactScreen.contains(target.display)) {
                 return Check(Status.CONFIRMED, "屏幕显示目标数量 ${target.display}")
             }
         }
@@ -217,7 +235,9 @@ object TaskGoalVerifier {
         val x: Int,
         val y: Int,
         val value: Int?,
-        val unit: PickerUnit
+        val unit: PickerUnit,
+        /** 原始数字文本（如 "2.5"）：value 是 Int，截断后无法与小数目标比对（体检第六轮 P3-4） */
+        val valueText: String? = null
     )
 
     data class PickerSnapshot(
@@ -236,21 +256,23 @@ object TaskGoalVerifier {
 
         companion object {
             private val linePattern = Regex(
-                "(?m)^(输入框|可点击|可滑动):\\s*(.+?)\\s*\\[(-?\\d+),(-?\\d+)\\](?:\\s*\\{([^}]*)\\})?\\s*$"
+                "(?m)^(输入框|可点击|可滑动):\\s*(.+?)\\s*(?:\\{([^}]*)\\})?\\s*\\[(-?\\d+),(-?\\d+)\\]\\s*$"
             )
 
             fun from(screenDump: String): PickerSnapshot {
                 val rawColumns = linePattern.findAll(screenDump).mapNotNull { m ->
                     val label = m.groupValues[2].trim()
-                    val meta = m.groupValues[5].orEmpty()
-                    val number = Regex("\\d+").find(label)?.value?.toIntOrNull()
+                    val meta = m.groupValues[3].orEmpty()
+                    val numberText = Regex("\\d+(?:\\.\\d+)?").find(label)?.value
+                    val number = numberText?.toDoubleOrNull()?.toInt()
                     if (number == null) null else PickerColumn(
                         label = label,
                         meta = meta,
-                        x = m.groupValues[3].toInt(),
-                        y = m.groupValues[4].toInt(),
+                        x = m.groupValues[4].toInt(),
+                        y = m.groupValues[5].toInt(),
                         value = number,
-                        unit = unitOf(label, meta)
+                        unit = unitOf(label, meta),
+                        valueText = numberText
                     )
                 }.toList()
                 val detected = rawColumns.any {
