@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.util.concurrent.Executors
 
 class VisualSampleController(private val service: AssistantAccessibilityService) {
 
@@ -27,12 +28,14 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val saveExecutor = Executors.newSingleThreadExecutor()
     private val library = VisualFeatureLibrary(service)
     private var root: View? = null
     private var selected = -1
     private var selectedRow: View? = null
     private var screen: Bitmap? = null
     private var rects: List<Rect> = emptyList()
+    private var savingSample = false
 
     fun show() {
         mainHandler.post {
@@ -445,17 +448,26 @@ class VisualSampleController(private val service: AssistantAccessibilityService)
             toast("先填写样本名称")
             return
         }
-        try {
-            val crop = Bitmap.createBitmap(frame, rect.left, rect.top, rect.width(), rect.height())
-            val saved = library.add(crop, label, packageName)
-            toast(if (saved == null) "样本保存失败" else "已保存「$label」")
-            if (saved != null) {
-                onSaved()
-            }
-        } catch (_: Exception) {
-            toast("样本保存失败")
+        if (savingSample) {
+            toast("正在保存上一个样本…")
+            return
         }
-    }
+        savingSample = true
+        saveExecutor.execute {
+            val result = runCatching {
+                val crop = Bitmap.createBitmap(frame, rect.left, rect.top, rect.width(), rect.height())
+                library.add(crop, label, packageName)
+            }
+            mainHandler.post {
+                savingSample = false
+                val saved = result.getOrNull()
+                toast(if (saved == null || result.isFailure) "样本保存失败" else "已保存「$label」")
+                if (saved != null) {
+                    onSaved()
+                }
+            }
+            }
+        }
 
     private fun rowText(index: Int, rect: Rect, existing: String, score: Float): String {
         val size = "${rect.width()}×${rect.height()}"
