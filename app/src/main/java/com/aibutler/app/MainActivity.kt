@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
@@ -1448,8 +1449,9 @@ class MainActivity : AppCompatActivity() {
     private fun runAutoGLMLoop(userText: String, contextUserText: String) {
         try {
             // Bug#5：路由只用当前任务句，不带上一次会话的历史，防止跨会话污染
-            val guessedApp = DeviceTools.guessApp(this, userText)
-                ?: inferTargetApp(userText, "")
+            val guessedApp = AgentEngine.extractHttpUrl(userText)
+                ?.let { resolveBrowserForUrl(it) }
+                ?: (DeviceTools.guessApp(this, userText) ?: inferTargetApp(userText, ""))
             android.util.Log.i(
                 "AIButler",
                 "AGLM guessedApp=${guessedApp ?: "null"}"
@@ -3320,6 +3322,14 @@ class MainActivity : AppCompatActivity() {
      * 所有任务共用；具体应用、页面和后续步骤不写死。
      */
     private fun launchTargetAppForTask(userText: String, contextUserText: String): Pair<String, String>? {
+        AgentEngine.extractHttpUrl(userText)?.let { url ->
+            val browser = resolveBrowserForUrl(url)
+            if (browser != null) {
+                val launchResult = DeviceTools.openAppFresh(this, browser.second)
+                android.util.Log.i("AIButler", "URL target launched=${browser.first}|${browser.second} result=$launchResult")
+                return browser
+            }
+        }
         val target = DeviceTools.guessApp(this, userText, contextUserText)
             ?: inferTargetApp(userText, contextUserText)
         if (target == null) {
@@ -3337,6 +3347,19 @@ class MainActivity : AppCompatActivity() {
         }
         android.util.Log.i("AIButler", "TARGET launched=${target.first}|${target.second} result=$launchResult")
         return target
+    }
+
+    /** 网页任务以系统能处理该链接的浏览器为目标应用，避免误把任务文字匹配到无关 App。 */
+    private fun resolveBrowserForUrl(url: String): Pair<String, String>? {
+        return try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            val ri = packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                ?: return null
+            val label = ri.loadLabel(packageManager).toString().trim()
+            if (label.isBlank()) null else label to ri.activityInfo.packageName
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

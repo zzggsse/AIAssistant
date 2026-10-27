@@ -112,6 +112,20 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 链接任务_浏览器入口识别为任务目标而不是无关跳转() {
+        val task = "open_url http://127.0.0.1:8000/order-test.html and tap Submit Order"
+        assertEquals("http://127.0.0.1:8000/order-test.html", AgentEngine.extractHttpUrl(task))
+        assertTrue(AgentEngine.isBrowserLikeLaunch("浏览器"))
+        assertTrue(AgentEngine.isBrowserLikeLaunch("System Browser"))
+    }
+
+    @Test
+    fun 链接提取_排除中文标点尾巴并忽略普通App名() {
+        assertEquals("https://example.com/a", AgentEngine.extractHttpUrl("打开 https://example.com/a，然后提交"))
+        assertFalse(AgentEngine.isBrowserLikeLaunch("淘宝"))
+    }
+
+    @Test
     fun 通用启动守卫_只允许任务开始时确定的目标包() {
         assertTrue(TaskAppGuard.isAllowed("com.tencent.mm", "com.tencent.mm"))
         assertFalse(TaskAppGuard.isAllowed("com.taobao.taobao", "com.tencent.mm"))
@@ -730,7 +744,10 @@ class AgentLogicTest {
 
     @Test
     fun 页面防护_订单确认按钮任何购物措辞都不豁免() {
-        val labels = listOf("提交订单", "确认订单", "确认下单", "立即购买", "Place Order", "Confirm Order")
+        val labels = listOf(
+            "提交订单", "确认订单", "确认下单", "立即购买",
+            "Place Order", "Confirm Order", "Submit Order", "SubmitOrder"
+        )
         labels.forEach { label ->
             assertTrue("订单确认按钮未硬拦截：$label", PageGuard.isSensitiveButton(label))
             val dump = "当前应用: com.any.app\n页面内容: $label\n可点击: $label [500,300]"

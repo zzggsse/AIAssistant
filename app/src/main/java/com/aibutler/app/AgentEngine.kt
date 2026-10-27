@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import com.google.gson.JsonArray
@@ -938,8 +939,14 @@ object AgentEngine {
         return when (act) {
             "Launch" -> {
                 val appName = str("app") ?: ""
+                val taskUrl = extractHttpUrl(userTask)
+                val requestedUrl = extractHttpUrl(appName)
+                val isRequestedBrowser = isBrowserLikeLaunch(appName) ||
+                    (a != null && appName.isNotBlank() && canOpenUrl(a, appName))
                 if (a == null) {
                     AglmResult("无界面上下文，无法启动应用（单元测试环境）", false)
+                } else if (requestedUrl != null || (taskUrl != null && isRequestedBrowser)) {
+                    AglmResult(DeviceTools.openUrl(a, requestedUrl ?: taskUrl!!), false)
                 } else if (!confirmLaunch(a, appName, userTask, allowedApp)) {
                     AglmResult("🛑 已拦截无关应用启动：$appName。请重新判断与任务直接相关的系统或原生入口。", false, "__JUMP_BLOCK__")
                 } else {
@@ -1432,6 +1439,31 @@ object AgentEngine {
                 Prefs.baseUrl(a), Prefs.apiKey(a), Prefs.model(a), messages,
                 JsonArray(), Prefs.fastMode(a)
             ).content.trim().uppercase().startsWith("YES")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 提取任务或动作参数里的显式链接；浏览器是完成这类任务的直接入口，不算无关跳转。 */
+    internal fun extractHttpUrl(text: String): String? {
+        return Regex("""https?://[^\s"'<>（）【】，。；！？]+""").find(text)?.value
+    }
+
+    /** 按语义判断浏览器类入口，不针对具体厂商或包名。 */
+    internal fun isBrowserLikeLaunch(appName: String): Boolean {
+        val normalized = appName.trim().lowercase()
+        return normalized.isNotEmpty() &&
+            (normalized.contains("browser") || normalized.contains("浏览器"))
+    }
+
+    /** 用系统能否处理网页链接识别浏览器，避免硬编码 Chrome/OPPO 浏览器等具体应用。 */
+    private fun canOpenUrl(a: Activity, appName: String): Boolean {
+        val target = DeviceTools.resolveApp(a, appName)?.second ?: return false
+        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/"))
+        return try {
+            a.packageManager.queryIntentActivities(webIntent, 0).any {
+                it.activityInfo.packageName == target
+            }
         } catch (_: Exception) {
             false
         }

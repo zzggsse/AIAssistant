@@ -90,8 +90,8 @@ object PageGuard {
         val text = normalize(screenDump)
         val highRisk = Regex(
             "立即支付|去支付|确认支付|正在支付|充值中|立即充值|收银台|付款|" +
-                "提交订单|确认订单|确认下单|立即购买|立即抢购|" +
-                "place.{0,4}order|confirm.{0,4}(?:payment|order)|complete.{0,4}order|check.?out",
+            "提交订单|确认订单|确认下单|立即购买|立即抢购|" +
+                "place.{0,4}order|submit.{0,4}order|confirm.{0,4}(?:payment|order)|complete.{0,4}order|check.?out",
             RegexOption.IGNORE_CASE
         ).containsMatchIn(text)
         if (highRisk) return true
@@ -125,7 +125,7 @@ object PageGuard {
         "确认支付|立即支付|去支付|确认付款|立即付款|支付|付款|转账|验证码|输入密码|" +
             "提交订单|确认订单|确认下单|立即购买|立即抢购|" +
             "(?i)pay\\s*now|make.{0,4}payment|check.?out|confirm.{0,4}(?:payment|order)|" +
-            "(?i)place.{0,4}order|complete.{0,4}order|enter.{0,4}password|" +
+            "(?i)place.{0,4}order|submit.{0,4}order|complete.{0,4}order|enter.{0,4}password|" +
             "(?i)proceed.{0,8}(?:pay|check.?out)|transfer\\s*(?:money|fund)?|" +
             "(?i)verify.{0,4}code|one.?time.(?:pass.?word|code)|otp"
     )
@@ -194,7 +194,8 @@ object PageGuard {
         if (!isRewardTask(task) || isLiveIntentTask(task)) return false
         val text = normalize(label)
         val isPaymentLike = Regex(
-            "立即支付|去支付|确认支付|提交订单|确认订单|立即购买|立即抢购|加入购物车"
+            "立即支付|去支付|确认支付|提交订单|确认订单|立即购买|立即抢购|加入购物车|" +
+                "(?i)submit.{0,4}order"
         ).containsMatchIn(text)
         if (isPaymentLike || !hasMissionVerbs(task)) {
             return isPaymentLike || Regex(
