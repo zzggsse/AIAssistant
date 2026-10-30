@@ -43,30 +43,33 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         private const val SAVE_DELAY_MS = 220L
 
         /**
-         * 旧版本把截图和思考存成两张卡片。加载会话时把它们重新归组，用户不用再逐张收起。
+         * 一段时间里截图和思考合并存成一张卡。加载旧会话时拆回独立文字卡，
+         * 让截图折叠头只负责截图，文字思考可被总开关统一收起。
          */
         @JvmStatic
-        private fun groupLegacyVisionThinking(source: List<Msg>): ArrayList<Msg> {
+        internal fun splitLegacyVisionThinking(source: List<Msg>): ArrayList<Msg> {
             val result = ArrayList<Msg>(source.size)
-            var index = 0
-            while (index < source.size) {
-                val item = source[index]
+            for (item in source) {
                 result.add(item)
-                index++
-                if (item.role != "vision") continue
-                val thoughts = mutableListOf<String>()
-                while (index < source.size && source[index].role == "think") {
-                    source[index].text.takeIf { it.isNotBlank() }?.let { thoughts.add(it) }
-                    index++
-                }
-                if (thoughts.isNotEmpty()) {
-                    item.thinkText = listOfNotNull(
-                        item.thinkText?.takeIf { it.isNotBlank() },
-                        thoughts.joinToString("\n\n")
-                    ).joinToString("\n\n")
+                item.thinkText?.takeIf { it.isNotBlank() }?.let { thought ->
+                    result.add(Msg("think", thought, collapsed = false))
+                    item.thinkText = null
                 }
             }
             return result
+        }
+
+        /** 只收起独立文字思考；截图卡片本身保持默认折叠，不在这里强改。 */
+        @JvmStatic
+        internal fun collapseAllThinkingItems(target: MutableList<Msg>): Boolean {
+            var changed = false
+            for (item in target) {
+                if (item.role == "think" && !item.collapsed) {
+                    item.collapsed = true
+                    changed = true
+                }
+            }
+            return changed
         }
     }
 
@@ -105,18 +108,8 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         val body = text.trim()
         if (body.isEmpty()) return
         val shown = if (body.length > MAX_THINK_CHARS) body.take(MAX_THINK_CHARS) + "\n…（已截断）" else body
-        val latestVision = items.lastOrNull()?.takeIf { it.role == "vision" }
-        if (latestVision != null) {
-            latestVision.thinkText = listOfNotNull(
-                latestVision.thinkText?.takeIf { it.isNotBlank() },
-                shown
-            ).joinToString("\n\n")
-            scheduleSave()
-            notifyDataSetChanged()
-            onItemsChanged?.invoke()
-            return
-        }
-        val msg = Msg("think", shown, collapsed = true)
+        // 文字思考默认可见，截图另有折叠头；两者分开后，长任务里也不会靠截图才能看推理。
+        val msg = Msg("think", shown, collapsed = false)
         items.add(msg)
         scheduleSave()
         notifyDataSetChanged()
@@ -154,6 +147,15 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
             notifyDataSetChanged()
             onItemsChanged?.invoke()
         }
+    }
+
+    fun collapseAllThinking(): Boolean {
+        val changed = collapseAllThinkingItems(items)
+        if (changed) {
+            scheduleSave()
+            notifyDataSetChanged()
+        }
+        return changed
     }
 
     fun loadPersisted() {
@@ -203,7 +205,7 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
     }
 
     private fun replaceItems(newItems: List<Msg>) {
-        val normalizedItems = groupLegacyVisionThinking(newItems)
+        val normalizedItems = splitLegacyVisionThinking(newItems)
         items.clear()
         items.addAll(normalizedItems)
         // 重新载入的会话里截图一律折叠收起：running 是"任务正在跑"的瞬时状态，落盘恢复后不可能还在跑
@@ -280,17 +282,14 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         }
         if (holder.viewType == TYPE_VISION) {
             val round = VISION_ROUND.find(msg.text)?.value?.let { " · $it" } ?: ""
-            holder.tvVisionHeader?.text = if (msg.running) "🔄 任务进行中…$round（点开查看截图思考过程）"
-            else "${msg.statusNote ?: "✅ 已完成任务"}$round（点开查看截图思考过程）"
+            holder.tvVisionHeader?.text = if (msg.running) "🔄 任务进行中…$round（点开查看截图）"
+            else "${msg.statusNote ?: "✅ 已完成任务"}$round（点开查看截图）"
             val expanded = !msg.collapsed
             holder.visionBody?.visibility = if (expanded) View.VISIBLE else View.GONE
             holder.tvVisionCaption?.text = msg.text
-            holder.tvVisionThink?.text = msg.thinkText.orEmpty()
-            holder.tvVisionThink?.visibility =
-                if (msg.thinkText.isNullOrBlank()) View.GONE else View.VISIBLE
             holder.ivVisionArrow?.rotation = if (msg.collapsed) -90f else 0f
             holder.ivVisionArrow?.contentDescription =
-                if (msg.collapsed) "展开截图思考过程" else "收起截图思考过程"
+                if (msg.collapsed) "展开屏幕截图" else "收起屏幕截图"
             val toggle = View.OnClickListener {
                 msg.collapsed = !msg.collapsed
                 notifyItemChanged(position)
@@ -341,7 +340,6 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         val visionHeader: View? = root.findViewById(R.id.visionHeader)
         val visionBody: View? = root.findViewById(R.id.visionBody)
         val tvVisionCaption: TextView? = root.findViewById(R.id.tvVisionCaption)
-        val tvVisionThink: TextView? = root.findViewById(R.id.tvVisionThink)
         val ivVisionArrow: android.widget.ImageView? = root.findViewById(R.id.ivVisionArrow)
         val ivVision: android.widget.ImageView? = root.findViewById(R.id.ivVision)
         val likeBurst: LikeBurstView? = root.findViewById(R.id.likeBurst)

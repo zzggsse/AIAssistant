@@ -130,6 +130,11 @@ class MainActivity : AppCompatActivity() {
             updateEmptyState()
             refreshHistory()
         }
+        findViewById<View>(R.id.btnCollapseThinking).setOnClickListener {
+            if (adapter.collapseAllThinking()) {
+                Toast.makeText(this, "已收起全部思考", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         etInput = findViewById(R.id.etInput)
         tvTts = findViewById(R.id.tvTts)
@@ -542,6 +547,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateEmptyState() {
         findViewById<View>(R.id.emptyState).visibility =
             if (adapter.items.isEmpty()) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.btnCollapseThinking).visibility =
+            if (adapter.items.any { it.role == "think" && !it.collapsed }) View.VISIBLE else View.GONE
     }
 
     // ---------- 大脑主循环 ----------

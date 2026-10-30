@@ -19,7 +19,7 @@
         android:paddingTop="8dp"
         android:paddingBottom="8dp">
 
-        <!-- 可点击的状态行：平时只显示"任务进行中…/已完成任务"，点开才看到截图（样式对齐思考过程气泡） -->
+        <!-- 可点击状态行：截图默认收起，小三角向下；点开后箭头转向上方 -->
         <LinearLayout
             android:id="@+id/visionHeader"
             android:layout_width="match_parent"
@@ -37,7 +37,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="截图思考过程"
+                android:text="屏幕截图"
                 android:textSize="11sp"
                 android:textStyle="bold"
                 android:textColor="@color/colorTextSecondary" />
@@ -49,7 +49,7 @@
                 android:src="@drawable/ic_chevron_down"
                 android:tint="@color/colorPrimary"
                 android:importantForAccessibility="yes"
-                android:contentDescription="展开或收起截图思考过程"
+                android:contentDescription="展开或收起屏幕截图"
                 android:paddingStart="8dp"
                 android:paddingEnd="0dp"
                 android:paddingTop="2dp"
@@ -81,15 +81,6 @@
                 android:maxHeight="240dp"
                 android:scaleType="fitStart"
                 android:contentDescription="发给AI识别的屏幕截图" />
-
-            <TextView
-                android:id="@+id/tvVisionThink"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:textSize="13sp"
-                android:textColor="@color/colorThinkText"
-                android:lineSpacingExtra="3dp" />
         </LinearLayout>
     </LinearLayout>
 </FrameLayout>
