@@ -1233,6 +1233,437 @@ class AssistantAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 系统 SET_ALARM intent 在部分 ROM 上会创建关闭状态的闹钟。这里不信任 intent 返回值，
+     * 打开闹钟列表后按“同一行”匹配时间/标签，只操作这一行的开关，点击后重新读屏复核。
+     */
+    fun ensureAlarmEnabled(hour: Int, minute: Int, label: String): String {
+        repeat(AlarmUiRules.MAX_LOAD_ATTEMPTS) { attempt ->
+            val root = rootInActiveWindow
+            android.util.Log.i(
+                "AIButler",
+                "ALARM ensure attempt=$attempt root=${root?.packageName} target=$hour:%02d".format(minute),
+            )
+            if (root != null && root.packageName != packageName) {
+                val anchors = activeRoots(root).mapNotNull { candidate ->
+                    findAlarmAnchor(candidate, hour, minute, label)
+                }
+                android.util.Log.i("AIButler", "ALARM ensure roots=${activeRoots(root).size}")
+                val anchor = anchors.firstOrNull()
+                android.util.Log.i("AIButler", "ALARM ensure anchor=${anchor != null}")
+                if (anchor != null) {
+                    val toggle = findAlarmRow(anchor, hour, minute, label)?.uncheckedToggle
+                    if (toggle == null) return "ENABLED"
+                    val rect = Rect()
+                    toggle.getBoundsInScreen(rect)
+                    if (rect.isEmpty) return "DISABLED"
+                    val clicked = if (toggle.isClickable) {
+                        toggle.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    } else {
+                        tap(rect.exactCenterX(), rect.exactCenterY())
+                    }
+                    if (!clicked) return "DISABLED"
+                    Thread.sleep(500)
+                    val refreshed = activeRoots(rootInActiveWindow ?: root).asSequence()
+                        .mapNotNull { candidate -> findAlarmAnchor(candidate, hour, minute, label) }
+                        .firstOrNull()
+                        ?.let { findAlarmRow(it, hour, minute, label) }
+                    return if (refreshed?.uncheckedToggle == null) "TOGGLED" else "DISABLED"
+                }
+                if (attempt == 6) {
+                    val visual = findAlarmVisualTarget(hour, minute, label)
+                    android.util.Log.i("AIButler", "ALARM visual target=${visual != null} $visual")
+                    if (visual != null) {
+                        if (visual.enabled) return "ENABLED"
+                        showActionPreview(visual.switchX.toFloat(), visual.switchY.toFloat(), "闹钟开关")
+                        if (!tap(visual.switchX.toFloat(), visual.switchY.toFloat())) return "DISABLED"
+                        Thread.sleep(700)
+                        val confirmed = findAlarmVisualTarget(hour, minute, label)
+                        android.util.Log.i("AIButler", "ALARM visual confirmed=${confirmed != null} enabled=${confirmed?.enabled}")
+                        return if (confirmed?.enabled == true) "TOGGLED" else "DISABLED"
+                    }
+                }
+            }
+            Thread.sleep(300)
+        }
+        return "NOT_FOUND"
+    }
+
+    /** 标准 intent 没有产生目标闹钟时，用任意时钟 App 的通用新增页完成设置。 */
+    fun createAlarmThenEnable(hour: Int, minute: Int, label: String): String {
+        if (!openAlarmEditor()) return "NOT_FOUND"
+        val editor = findAlarmEditor() ?: return "NOT_FOUND"
+        val pickers = alarmTimePickers(editor)
+        if (pickers.size < 2) {
+            android.util.Log.i("AIButler", "ALARM ui editor pickers=${pickers.size}")
+            return "NOT_FOUND"
+        }
+        val rangeValues = intArrayOf(24, 60)
+        for ((index, picker) in pickers.take(2).withIndex()) {
+            val target = if (index == 0) hour else minute
+            val range = rangeValues[index]
+            if (!setAlarmPickerValue(editor, index, target, range)) {
+                android.util.Log.i("AIButler", "ALARM ui picker failed index=$index target=$target")
+                return "NOT_FOUND"
+            }
+        }
+
+        val labelNode = alarmLabelField(editor)
+        if (label.isNotBlank()) {
+            if (labelNode == null || !fillAlarmLabel(labelNode, label)) {
+                android.util.Log.i("AIButler", "ALARM ui label failed")
+                return "NOT_FOUND"
+            }
+        }
+
+        val refreshedEditor = findAlarmEditor() ?: return "NOT_FOUND"
+        val save = findAlarmControl(refreshedEditor, AlarmUiRules::isSaveAlarmControl)
+        if (save == null) {
+            android.util.Log.i("AIButler", "ALARM ui save missing")
+            return "NOT_FOUND"
+        }
+        if (!clickAlarmNode(save, "保存闹钟")) return "NOT_FOUND"
+        Thread.sleep(900)
+        android.util.Log.i("AIButler", "ALARM ui saved target=$hour:%02d".format(minute))
+        return ensureAlarmEnabled(hour, minute, label)
+    }
+
+    private fun openAlarmEditor(): Boolean {
+        repeat(AlarmUiRules.MAX_EDITOR_WAIT_ATTEMPTS) { attempt ->
+            val root = rootInActiveWindow
+            if (root != null && root.packageName != packageName) {
+                val button = activeRoots(root).asSequence()
+                    .mapNotNull { source -> findAlarmControl(source, AlarmUiRules::isAddAlarmControl) }
+                    .firstOrNull()
+                if (button != null && clickAlarmNode(button, "添加闹钟")) {
+                    android.util.Log.i("AIButler", "ALARM ui add attempt=$attempt")
+                    return true
+                }
+            }
+            Thread.sleep(300)
+        }
+        return false
+    }
+
+    private fun findAlarmEditor(): AccessibilityNodeInfo? {
+        repeat(AlarmUiRules.MAX_EDITOR_WAIT_ATTEMPTS) {
+            val root = rootInActiveWindow
+            if (root != null && root.packageName != packageName) {
+                val editor = activeRoots(root).firstOrNull { source ->
+                    val nodes = collectAlarmNodes(source)
+                    nodes.any { it.isScrollable && AlarmUiRules.pickerValue(ownNodeText(it)) != null } &&
+                        nodes.any { AlarmUiRules.isSaveAlarmControl(ownNodeText(it)) }
+                }
+                if (editor != null) return editor
+            }
+            Thread.sleep(300)
+        }
+        return null
+    }
+
+    private fun alarmTimePickers(editor: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        return collectAlarmNodes(editor)
+            .filter { node ->
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                node.isScrollable && !rect.isEmpty &&
+                    AlarmUiRules.pickerValue(ownNodeText(node)) != null
+            }
+            .map { node ->
+                val rect = Rect()
+                node.getBoundsInScreen(rect)
+                node to rect.left
+            }
+            .sortedBy { it.second }
+            .map { it.first }
+    }
+
+    private fun alarmLabelField(editor: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val editable = collectAlarmNodes(editor).filter { it.isEditable }
+        return editable.firstOrNull { AlarmUiRules.isAlarmLabelField(ownNodeText(it), hintText(it)) }
+            ?: editable.singleOrNull()
+    }
+
+    private fun setAlarmPickerValue(editor: AccessibilityNodeInfo, index: Int, target: Int, range: Int): Boolean {
+        var unknownStreak = 0
+        for (attempt in 0 until range + 4) {
+            val node = alarmTimePickers(editor).getOrNull(index) ?: return false
+            val current = pickerValue(node) ?: return false
+            if (current == target) return true
+            val planned = AlarmUiRules.shorterPickerDirection(current, target, range)
+            val action = if (planned > 0) {
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+            } else {
+                AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+            }
+            if (!node.performAction(action)) return false
+            Thread.sleep(160)
+            val next = alarmTimePickers(editor).getOrNull(index)?.let(::pickerValue)
+            if (next == target) return true
+            if (next == null || next == current) {
+                unknownStreak++
+                if (unknownStreak >= 5) return false
+            } else {
+                unknownStreak = 0
+                val movedForward = next == (current + 1) % range
+                val movedBackward = next == (current - 1 + range) % range
+                if (!movedForward && !movedBackward) {
+                    // 有些选择器一次滑一格以上；保留计划方向继续逼近目标。
+                    continue
+                }
+            }
+        }
+        return alarmTimePickers(editor).getOrNull(index)?.let(::pickerValue) == target
+    }
+
+    private fun pickerValue(node: AccessibilityNodeInfo): Int? {
+        runCatching { node.refresh() }
+        return AlarmUiRules.pickerValue(ownNodeText(node))
+    }
+
+    private fun hintText(node: AccessibilityNodeInfo): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) node.hintText?.toString().orEmpty() else ""
+
+    private fun fillAlarmLabel(node: AccessibilityNodeInfo, text: String): Boolean {
+        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("ai", text))
+        return node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+    }
+
+    private fun findAlarmControl(
+        root: AccessibilityNodeInfo,
+        match: (String) -> Boolean,
+    ): AccessibilityNodeInfo? {
+        val candidates = collectAlarmNodes(root).filter { match(ownNodeText(it)) }
+        val screen = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+        return candidates.firstOrNull { node ->
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            !rect.isEmpty && Rect.intersects(rect, screen)
+        }?.let { node ->
+            generateSequence(node) { runCatching { it.parent }.getOrNull() }
+                .take(6)
+                .firstOrNull { it.isClickable }
+                ?: node
+        }
+    }
+
+    private fun clickAlarmNode(node: AccessibilityNodeInfo, name: String): Boolean {
+        if (node.isClickable) return runCatching { node.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        val screen = Rect(0, 0, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+        return !rect.isEmpty && Rect.intersects(rect, screen) &&
+            tap(rect.exactCenterX(), rect.exactCenterY())
+    }
+
+    private fun collectAlarmNodes(root: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val out = ArrayList<AccessibilityNodeInfo>()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty() && out.size < 500) {
+            val node = queue.removeFirst()
+            try {
+                val label = ownNodeText(node)
+                if (label.isNotBlank() || node.isClickable || node.isEditable || node.isScrollable) {
+                    out.add(node)
+                }
+                for (index in 0 until node.childCount) {
+                    node.getChild(index)?.let(queue::add)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return out
+    }
+
+    private fun activeRoots(primary: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val roots = LinkedHashSet<AccessibilityNodeInfo>()
+        roots.add(primary)
+        try {
+            windows?.forEach { window ->
+                window.root?.let { if (it.packageName == primary.packageName) roots.add(it) }
+            }
+        } catch (_: Exception) {
+        }
+        return roots.toList()
+    }
+
+    private fun findAlarmVisualTarget(
+        hour: Int,
+        minute: Int,
+        label: String,
+    ): AlarmUiRules.VisualTarget? {
+        if (!CaptureService.isActive()) return null
+        val full = CaptureService.capture() ?: return null
+        try {
+            val maxW = 1100
+            val scaled = if (full.width > maxW) {
+                val height = (full.height.toDouble() * maxW / full.width).toInt()
+                Bitmap.createScaledBitmap(full, maxW, height, true)
+            } else full
+            try {
+                val bos = java.io.ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 85, bos)
+                val b64 = android.util.Base64.encodeToString(bos.toByteArray(), android.util.Base64.NO_WRAP)
+                val target = "%02d:%02d".format(hour, minute)
+                val wantedLabel = if (label.isBlank()) "不要求备注" else label.trim()
+                val prompt = """
+                    这是一张系统时钟闹钟列表截图，真实分辨率 ${full.width}x${full.height} 像素。
+                    请找到完全满足时间 $target 且备注为 $wantedLabel 的那一行闹钟。
+                    判断该行右侧开关当前是开还是关。不要点击任何控件。
+                    只输出 JSON，不要输出其他文字：
+                    {"found":true,"row_text":"完整行文字","row_y":行中心真实像素,"switch_x":开关中心真实像素,"switch_y":开关中心真实像素,"enabled":true}
+                    如果没有完全匹配的行，只输出：{"found":false}
+                """.trimIndent()
+                val raw = LlmClient.chatVision(
+                    Prefs.baseUrl(this),
+                    Prefs.apiKey(this),
+                    Prefs.model(this),
+                    prompt,
+                    b64,
+                )
+                android.util.Log.i("AIButler", "ALARM visual raw=$raw")
+                return AlarmUiRules.parseVisualTarget(
+                    raw,
+                    hour,
+                    minute,
+                    label,
+                    full.width,
+                    full.height,
+                )
+            } finally {
+                if (scaled !== full) scaled.recycle()
+            }
+        } catch (e: Exception) {
+            android.util.Log.i("AIButler", "ALARM visual failed=${e.message}")
+            return null
+        } finally {
+            full.recycle()
+        }
+    }
+
+    private class AlarmRow(
+        val labels: List<String>,
+        private val toggles: List<AccessibilityNodeInfo>,
+    ) {
+        val uncheckedToggle: AccessibilityNodeInfo?
+            get() = toggles.firstOrNull { !it.isChecked }
+    }
+
+    private fun findAlarmAnchor(
+        root: AccessibilityNodeInfo,
+        hour: Int,
+        minute: Int,
+        label: String,
+    ): AccessibilityNodeInfo? {
+        // Some ROMs expose a valid alarm root whose children cannot be fetched through BFS,
+        // while findAccessibilityNodeInfosByText still resolves visible list items.
+        val directCandidates = buildList {
+            val refreshed = runCatching { root.refresh() }.getOrDefault(false)
+            android.util.Log.i("AIButler", "ALARM refresh refreshed=$refreshed")
+            AlarmUiRules.timeVariants(hour, minute).forEach { time ->
+                runCatching { root.findAccessibilityNodeInfosByText(time) }
+                    .getOrDefault(emptyList())
+                    .forEach(::add)
+            }
+            if (label.isNotBlank()) {
+                runCatching { root.findAccessibilityNodeInfosByText(label.trim()) }
+                    .getOrDefault(emptyList())
+                    .forEach(::add)
+            }
+        }.filter { candidate ->
+            AlarmUiRules.isTimeRow(ownNodeText(candidate), hour, minute) ||
+                label.isNotBlank() &&
+                ownNodeText(candidate).contains(label.trim(), ignoreCase = true)
+        }
+        for (candidate in directCandidates) {
+            val row = findAlarmRow(candidate, hour, minute, label)
+            android.util.Log.i(
+                "AIButler",
+                "ALARM direct candidate own=${ownNodeText(candidate)} row=${row != null} labels=${row?.labels}",
+            )
+            if (row != null) return candidate
+        }
+
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val own = sequenceOf(
+                node.text?.toString().orEmpty(),
+                node.contentDescription?.toString().orEmpty(),
+            ).joinToString(" ")
+            // ROM 可能会把时间、备注和开关拆到同一行的不同节点；先按时间定位，
+            // 再由 findAlarmRow 在祖先行里核对完整标签，避免把无关时间误开。
+            if (AlarmUiRules.isTimeRow(own, hour, minute)) {
+                val row = findAlarmRow(node, hour, minute, label)
+                android.util.Log.i(
+                    "AIButler",
+                    "ALARM time candidate own=$own row=${row != null} labels=${row?.labels}"
+                )
+                if (row != null) return node
+            }
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(queue::add)
+            }
+        }
+        return null
+    }
+
+    private fun findAlarmRow(
+        anchor: AccessibilityNodeInfo,
+        hour: Int,
+        minute: Int,
+        label: String,
+    ): AlarmRow? {
+        var current: AccessibilityNodeInfo? = anchor
+        var hops = 0
+        while (current != null && hops < 8) {
+            val labels = ArrayList<String>()
+            val toggles = ArrayList<AccessibilityNodeInfo>()
+            collectAlarmRow(current, labels, toggles, depth = 0)
+            val hasTargetLabel = label.isBlank() || labels.any {
+                it.contains(label.trim(), ignoreCase = true)
+            }
+            val matchesRow = AlarmUiRules.matchesRow(
+                labels.joinToString(" "),
+                hour,
+                minute,
+                label,
+            )
+            if (hasTargetLabel && matchesRow && toggles.isNotEmpty()) return AlarmRow(labels, toggles)
+            current = current.parent
+            hops++
+        }
+        return null
+    }
+
+    private fun ownNodeText(node: AccessibilityNodeInfo): String = sequenceOf(
+        node.text?.toString().orEmpty(),
+        node.contentDescription?.toString().orEmpty(),
+    ).joinToString(" ")
+
+    private fun collectAlarmRow(
+        node: AccessibilityNodeInfo?,
+        labels: MutableList<String>,
+        toggles: MutableList<AccessibilityNodeInfo>,
+        depth: Int,
+    ) {
+        if (node == null || depth > 8 || toggles.size > 4) return
+        node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let(labels::add)
+        node.contentDescription?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let(labels::add)
+        if (node.isCheckable) toggles.add(node)
+        for (index in 0 until node.childCount) {
+            node.getChild(index)?.let { collectAlarmRow(it, labels, toggles, depth + 1) }
+        }
+    }
+
+    /**
      * Reward SDKs often expose the result text but leave the tiny X unnamed or non-clickable.
      * Locate the result first, then use semantics plus same-row structure to find its close
      * control. This works for any app and never trusts the bottom ad CTA as an exit.

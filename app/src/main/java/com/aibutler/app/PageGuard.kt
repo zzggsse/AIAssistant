@@ -12,6 +12,12 @@ import kotlin.math.abs
 object PageGuard {
     private const val TAG = "PageGuard"
 
+    /**
+     * 激励广告素材含直播内容时的最大等待轮数（每轮约5秒）。
+     * 直播带货类激励广告普遍 30-60 秒；低于 12 轮会在领奖前被直播间守卫误退作废奖励。
+     */
+    const val REWARD_LIVE_EMBED_MAX_ROUNDS = 12
+
     data class RewardCompletionExit(
         val evidence: String,
         val closeLabel: String?,
@@ -34,6 +40,11 @@ object PageGuard {
     private val rewardAdTransform = Regex(
         "点击并浏览|浏览\\s*\\d+|继续观看|额外得|再看一[个轮集次]|再[领得].{0,8}(?:金币|奖励)|" +
             "立即下载|去下载|安装|试玩|抢购|了解详情|查看详情|了解更多|去完成|去体验"
+    )
+
+    /** 商品流里的销量证据（如「4000+人付款」）不是付款动作，先剥离后再判支付语义。 */
+    private val salesEvidence = Regex(
+        "\\d+(?:\\.\\d+)?(?:万|亿)?\\+?人付款|付款人数[:：]?\\s*\\d+(?:\\.\\d+)?(?:万|亿)?\\+?"
     )
 
     fun isRewardTask(task: String): Boolean {
@@ -117,14 +128,42 @@ object PageGuard {
     }
 
     fun isPaymentOrOrderPage(screenDump: String): Boolean {
-        val text = normalize(screenDump)
+        // 普通商品流/首页横幅也会出现“抢购”等营销词。页面级强退只认明确的
+        // 支付/订单控件，或“支付方式+金额”这类成组出现的结算语义。
+        val segments = screenDump
+            .lineSequence()
+            .flatMap { it.split(Regex("\\s+/\\s+")) }
+            .map { salesEvidence.replace(normalize(it), "") }
+            .filter { it.isNotBlank() }
+            .toList()
         val highRisk = Regex(
             "立即支付|去支付|确认支付|正在支付|充值中|立即充值|收银台|付款|" +
-            "提交订单|确认订单|确认下单|立即购买|立即抢购|" +
+                "提交订单|确认订单|确认下单|立即购买|立即抢购|" +
                 "place.{0,4}order|submit.{0,4}order|confirm.{0,4}(?:payment|order)|complete.{0,4}order|check.?out",
             RegexOption.IGNORE_CASE
-        ).containsMatchIn(text)
-        if (highRisk) return true
+        )
+        val isActionControl = Regex("可点击:|可点:|button|Button", RegexOption.IGNORE_CASE)
+        val explicitOrderAction = Regex(
+            "立即支付|去支付|确认支付|正在支付|充值中|立即充值|收银台|付款|" +
+                "提交订单|确认订单|确认下单|" +
+                "place.{0,4}order|submit.{0,4}order|confirm.{0,4}(?:payment|order)|complete.{0,4}order|check.?out",
+            RegexOption.IGNORE_CASE
+        )
+        val hasActionControl = segments.any { segment ->
+            isActionControl.containsMatchIn(segment) && highRisk.containsMatchIn(segment)
+        }
+        if (hasActionControl) {
+            // “立即购买/抢购”也会出现在首页营销横幅和搜索信息流上；只有页面本身
+            // 没有浏览区特征（或已出现结算金额/详情语义）时，才把它当订单页强退。
+            val hasExplicitOrderAction = segments.any { segment ->
+                isActionControl.containsMatchIn(segment) && explicitOrderAction.containsMatchIn(segment)
+            }
+            val browseSignals = setOf("搜索", "首页", "消息", "我的", "购物车", "分类", "商品推荐", "猜你喜欢")
+            val browseSignalCount = browseSignals.count { screenDump.contains(it) }
+            if (hasExplicitOrderAction || browseSignalCount < 2) return true
+        }
+
+        val text = salesEvidence.replace(normalize(screenDump), "")
 
         val signals = listOf(
             Regex("支付宝支付"),
@@ -155,19 +194,36 @@ object PageGuard {
      * 登录方式/凭据语义，避免把“我的”“设置”等普通页面里的历史登录状态误判成登录墙。
      */
     fun isManualAuthPage(screenDump: String): Boolean {
-        val text = normalize(screenDump)
+        // AutoGLM dump 用换行和「 / 」分隔页面文本/关键元素；整页合并会让
+        // 不同消息里的“账号”和“登录”跨会话互相命中。这里保留分段边界。
+        val segments = screenDump
+            .lineSequence()
+            .flatMap { it.split(Regex("\\s+/\\s+")) }
+            .map(::normalize)
+            .filter { it.isNotBlank() }
+            .map { segment ->
+                Regex("已登录|登录成功|退出登录|账号与安全|账号登录通知|登录通知")
+                    .replace(segment, "")
+            }
+            .filter { it.isNotBlank() }
+            .toList()
         val explicitAuthPage = Regex(
             "扫码登录|二维码登录|账号登录|手机号登录|短信登录|验证码登录|" +
                 "微信登录|QQ登录|apple登录|忘记密码|登录/注册|注册/登录|" +
                 "(?i)scan.{0,6}qr.{0,6}login|account.?login|mobile.?login|forgot.{0,6}password",
             RegexOption.IGNORE_CASE
-        ).containsMatchIn(text)
-        if (explicitAuthPage) return true
+        )
+        if (segments.any(explicitAuthPage::containsMatchIn)) return true
 
-        val stateRemoved = Regex("已登录|登录成功|退出登录|账号与安全").replace(text, "")
         val authAction = Regex("登录|注册|log\\s*in|sign\\s*in", RegexOption.IGNORE_CASE)
         val credential = Regex("密码|验证码|手机号|账号|password|verification|otp", RegexOption.IGNORE_CASE)
-        return authAction.containsMatchIn(stateRemoved) && credential.containsMatchIn(stateRemoved)
+        if (segments.any { authAction.containsMatchIn(it) && credential.containsMatchIn(it) }) return true
+
+        // 登录页常把标题和输入框拆成相邻控件；超过两段的普通消息列表不应互相拼成凭据。
+        return segments.asSequence().windowed(2, 1).any { (left, right) ->
+            (authAction.containsMatchIn(left) && credential.containsMatchIn(right)) ||
+                (credential.containsMatchIn(left) && authAction.containsMatchIn(right))
+        }
     }
 
     /** Button labels that require the user's manual confirmation, regardless of task wording. */
@@ -182,7 +238,21 @@ object PageGuard {
 
     fun isSensitiveButton(label: String): Boolean {
         if (label.isBlank()) return false
-        return sensitiveButtonPattern.containsMatchIn(normalize(label))
+        return sensitiveButtonPattern.containsMatchIn(salesEvidence.replace(normalize(label), ""))
+    }
+
+    /**
+     * 系统投屏/隐私保护可能只给读屏一行“已隐藏”。页面里只要还有可点击、输入或
+     * 滚动控件，普通应用的局部“已隐藏”文案就不是遮挡层；整页都不可操作才停止。
+     */
+    fun isPrivacyOverlay(screenDump: String): Boolean {
+        val text = normalize(screenDump)
+        val explicitHidden = Regex(
+            "屏幕共享画面已隐藏|画面被隐藏|页面内容已隐藏|视觉脑无法读取|当前页面已隐藏"
+        ).containsMatchIn(text)
+        val bareHidden = text == "已隐藏" || text.endsWith("已隐藏")
+        if (!explicitHidden && !bareHidden) return false
+        return !Regex("可点击:|可点:|输入框:|可滑动:").containsMatchIn(screenDump)
     }
 
     /**
@@ -488,11 +558,43 @@ object PageGuard {
         return null
     }
 
+    /**
+     * A search results page can contain one native ad card with a download CTA. The page is
+     * still a valid result list: force-exiting it would abandon the query and cannot recover
+     * the search session. Require independent evidence of search context and ordinary results,
+     * so a real full-screen download wall is not accidentally exempted.
+     */
+    fun isEmbeddedAdSearchResults(screenDump: String): Boolean {
+        val text = normalize(screenDump)
+        if (!Regex("下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币")
+                .containsMatchIn(text)
+        ) return false
+
+        val explicitSearchContext = Regex(
+            "搜索结果|相关搜索|清除查询|清除搜索|清除输入|搜索历史|搜索发现|猜你想搜|热搜"
+        ).containsMatchIn(text)
+        val searchBoxContext = Regex("输入框:").containsMatchIn(screenDump) &&
+            Regex("搜索|查找").containsMatchIn(text)
+        val searchTabCount = Regex("综合|用户|视频|影像|影视|直播|商品")
+            .findAll(text).map { it.value }.toSet().size
+        val searchContext = explicitSearchContext || searchBoxContext || searchTabCount >= 3
+        if (!searchContext) return false
+
+        val ordinaryResultEvidence = listOf(
+            Regex("UP主?|作者|博主|发布者"),
+            Regex("弹幕|播放|观看|点赞|评论|分享|收藏"),
+            Regex("共\\d+集|[01]?\\d:[0-5]\\d"),
+            Regex("今天|昨天|小时前|天前|个月前|年前|\\d+月\\d+日")
+        )
+        return ordinaryResultEvidence.count { it.containsMatchIn(text) } >= 2
+    }
+
     /** Install/download walls often cover the task page and swallow system Back. */
-    fun isDownloadWall(screenDump: String): Boolean = Regex(
-        "下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币",
-        RegexOption.IGNORE_CASE
-    ).containsMatchIn(normalize(screenDump))
+    fun isDownloadWall(screenDump: String): Boolean =
+        !isEmbeddedAdSearchResults(screenDump) && Regex(
+            "下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(normalize(screenDump))
 
     /**
      * A paused rewarded-ad timer must be resumed, not abandoned. Return the visible continue
@@ -636,6 +738,35 @@ object PageGuard {
             return commerceWords.containsMatchIn(before)
         }
         return commerceWords.containsMatchIn(text)
+    }
+
+    /**
+     * 搜索/比较/浏览类任务是“看信息”，不是“要交易”。商品详情页本身是正当目的地；
+     * 只有明确交易任务才豁免下单页动作拦截。这里仍会被支付确认和敏感按钮红线覆盖。
+     */
+    fun isProductResearchTask(task: String): Boolean {
+        val text = normalize(task)
+        val researchWords = Regex("搜索|查找|找|浏览|看看|逛|比较|销量|价格|评价|详情")
+        val transactionWords = Regex("充值|支付|下单|购买|付款|抢购|加入购物车|加购")
+        if (Regex("不要|(?<!特)别再?|禁止|避免|不得").containsMatchIn(text)) {
+            val marker = Regex("不要|(?<!特)别再?|禁止|避免|不得").find(text)?.value.orEmpty()
+            val before = text.substringBefore(marker, "")
+            return researchWords.containsMatchIn(before) && !transactionWords.containsMatchIn(before)
+        }
+        return researchWords.containsMatchIn(text) && !transactionWords.containsMatchIn(text)
+    }
+
+    /**
+     * 研究/比较任务需要点开搜索结果卡确认销量和价格。只豁免“价格+销量证据”
+     * 的结果卡本身；广告转化、直播、下载和交易按钮仍走各自红线。
+     */
+    fun isProductResearchCard(task: String, label: String, context: String = ""): Boolean {
+        if (!isProductResearchTask(task)) return false
+        val text = normalize(label) + " / " + normalize(context)
+        val hasPrice = Regex("[¥￥]|(?:\\d+(?:\\.\\d+)?)元|价格").containsMatchIn(text)
+        val hasSales = salesEvidence.containsMatchIn(text) ||
+            Regex("月销|销量|已售").containsMatchIn(text)
+        return hasPrice && hasSales
     }
 
     private fun explicitLiveExit(text: String): String? = listOf(

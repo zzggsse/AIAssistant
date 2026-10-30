@@ -534,6 +534,8 @@ object AgentEngine {
             "2.1 截图上如有蓝色数字圆点角标，是系统给可点击/输入框元素编的号，与关键元素行首的[N]一一对应：要点击带角标的元素，就把 Tap 坐标给到角标中心（即该元素中心）；编号只是选择依据，绝不能把编号数字当坐标输出；没有角标的元素仍按截图位置判断。\n" +
             "3. 优先点击文字、图标说明或页面概要中明确匹配目标的可点击元素；无文字按钮要结合截图位置判断。\n" +
             "4. 输入前先点击输入框，确认聚焦后 Type；需要确认/搜索/发送时，观察新页面再点击对应按钮。\n" +
+            "4.1 【目标搜索】找人、找群、找联系人或搜索内容时，Type 必须输入用户说的完整目标名称，不要自造拼音缩写。" +
+            "如果屏幕只有取消/清空而没有明确搜索/前往按钮，就等待结果或点击明确匹配目标的结果项；绝不点取消/清空来提交。\n" +
             "5. 页面加载中、看视频或等倒计时时用 Wait；连续 Wait 三次仍无变化就重新观察或返回重试。\n" +
             "6. 【弹窗优先】每个新页面先检查弹窗。添加至桌面、添加组件、安装、下载、开屏广告、公告、更新提示都属于阻塞性弹窗：优先点取消/关闭/跳过/以后再说/我知道了；绝不点添加、安装、去下载、立即更新。关闭后重新读屏再操作。\n" +
             "6.1 【禁碰系统开关】绝不从屏幕顶部下拉通知栏/快捷中心，绝不点击里面的任何开关（自动旋转、手电筒、省电模式等）；滑动一律从屏幕中部开始。\n" +
@@ -691,13 +693,187 @@ object AgentEngine {
         val echoedPlaceholder = t.contains("旧页面内容已丢弃") ||
             t.contains("历史已省略") ||
             t.contains("只根据最新页面决策")
-        return if (echoedPlaceholder || t.length <= 6) {
-            "\n⚠️ 上一轮你复读了系统提示文字，属于无效输出。禁止输出任何方括号/括号提示语、禁止解释页面。" +
-                "只输出一个动作：先<think>一句话</think>，再<answer>do(action=\"Tap\", element=[x,y])</answer>" +
-                "或<answer>finish(message=\"结果\")</answer>。"
+        val echoPrefix = if (echoedPlaceholder || t.length <= 6) {
+            "上一轮复读了系统提示文字，属于无效输出"
         } else {
-            "\n⚠️ 上一轮输出无效：必须输出 <think>...</think> 和 <answer>do(...)</answer>，不要解释页面或输出其他文字。当前截图和屏幕信息就是最新页面。"
+            "上一轮输出了任务计划/页面描述，但没有给出可执行动作"
         }
+        return "\n⚠️ $echoPrefix。禁止输出“当前状态/首先/然后/1./2.”等计划，禁止解释页面，禁止只输出思考。" +
+            "现在必须直接输出一行协议：先<think>一句话</think>，紧接<answer>do(action=\"Tap\", element=[x,y])</answer>" +
+            "或<answer>finish(message=\"结果\")</answer>；两个标签都必须完整闭合。"
+    }
+
+    /**
+     * 协议失败恢复：模型说“先关闭弹窗”却没有输出动作时，系统只按读屏里的
+     * 明确关闭控件代点一次。这仍是通用弹窗恢复，不认识任何业务页面。
+     */
+    fun protocolRecoveryDismiss(raw: String, screenDump: String): String? {
+        val modelSeesOverlay = Regex("弹窗|弹层|浮层|遮罩|公告|开屏广告")
+            .containsMatchIn(raw.replace(Regex("\\s+"), ""))
+        if (!modelSeesOverlay) return null
+        val priority = Regex("关闭按钮|关闭|跳过|以后再说|暂不|下次再说|我知道了|知道了|取消")
+        return ExitMemory.visibleButtons(screenDump)
+            .filter { it.score in 300..499 }
+            .sortedWith(
+                compareByDescending<ExitCandidate> { priority.containsMatchIn(it.label) }
+                    .thenByDescending { it.score }
+            )
+            .firstOrNull()?.label
+    }
+
+    /** 从任务原文提取需要搜索或发消息的命名目标；只做通用语法抽取，不认识具体应用。 */
+    fun namedActionTarget(task: String): String? {
+        val quoted = Regex("[“\"']([^“”\"']{1,40})[”\"']").find(task)
+        quoted?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+
+        val send = Regex(
+            "(?:给|发给|发送给)\\s*([^，。,;；：:！!？?\\n\"“”']{1,30}?)\\s*(?:发送|发消息|回复|发)(?=[：:，。,;；！!？?\\n]|$)"
+        ).find(task)
+        send?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }?.let { return it }
+
+        val search = Regex(
+            "(?:搜索|搜一?下|查找|找一?找)\\s*([^，。,;；：:！!？?\\n\"“”']{1,40}?)(?=$|[，。,;；：:！!？?]|然后|并且|再看|再找)"
+        ).find(task)
+        return search?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    /** 发送类任务的通用语义：发给谁、发什么。具体聊天 App 不参与判断。 */
+    data class MessageSendGoal(val target: String, val body: String)
+
+    fun parseMessageSendGoal(task: String): MessageSendGoal? {
+        val target = namedActionTarget(task) ?: return null
+        val send = Regex(
+            "(?:发送|发消息|回复|发)\\s*([:：]|说\\s*)?(.+)",
+            RegexOption.DOT_MATCHES_ALL
+        ).find(task) ?: return null
+        val rawBody = send.groupValues[2].trim()
+        if (rawBody.isBlank()) return null
+
+        val body = when {
+            rawBody.startsWith("说") -> rawBody.removePrefix("说").trim()
+            rawBody.first() in "\"“'“" && rawBody.last() in "\"”'”" ->
+                rawBody.substring(1, rawBody.length - 1).trim()
+            else -> rawBody
+        }
+        if (body.isBlank() || body == target) return null
+        return MessageSendGoal(target, body)
+    }
+
+    /** 从 AutoGLM Type 动作里提取将要输入的原文，供完成关做机械链路核对。 */
+    fun parseAutoGlmTypeText(answer: String): String? {
+        return Regex("(?<![A-Za-z_])text=\"((?:[^\"\\\\]|\\\\.)*)\"").find(answer)
+            ?.groupValues?.get(1)
+            ?.replace("\\\"", "\"")
+            ?.replace("\\\\", "\\")
+            ?.replace("\\n", "\n")
+    }
+
+    /** 坐标指向“发送/Send”这类通用发送控件时才接受发送链路证据。 */
+    fun isSendControlTap(screenDump: String, answer: String): Boolean {
+        if (!answer.contains("Tap", ignoreCase = true)) return false
+        val point = Regex("element=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]").find(answer) ?: return false
+        val x = point.groupValues[1].toIntOrNull() ?: return false
+        val y = point.groupValues[2].toIntOrNull() ?: return false
+        val label = TaskGoalVerifier.labelAtPoint(screenDump, x, y)
+        return Regex("发送|Send", RegexOption.IGNORE_CASE).containsMatchIn(label)
+    }
+
+    /**
+     * 键盘浮层可能遮住聊天应用自己的发送控件，读屏拿不到稳定标签。
+     * 这时只接受视觉模型明确说“点击发送按钮/控件”的 Tap，后续仍要求页面变化。
+     */
+    fun isMessageSendTapIntent(screenDump: String, answer: String, modelReasoning: String): Boolean {
+        if (!answer.contains("Tap", ignoreCase = true)) return false
+        if (isSendControlTap(screenDump, answer)) return true
+        return Regex("发送按钮|点击发送|点发送|发送控件").containsMatchIn(modelReasoning)
+    }
+
+    fun normalizeSearchText(value: String): String =
+        value.replace(Regex("\\s+"), "").replace("[“”\"']", "")
+
+    /** 当前是通用搜索/查找输入场景；以读屏文本判断，不依赖某个应用。 */
+    fun isSearchInputContext(screenDump: String): Boolean {
+        val hasInput = Regex("输入框:").containsMatchIn(screenDump)
+        val searchIntent = Regex("搜索|查找|找人|找人群|最近搜索|搜索指定内容").containsMatchIn(screenDump)
+        return hasInput && searchIntent
+    }
+
+    /** 读取搜索框当前内容；历史词/发现词出现在页面里不代表已输入目标。 */
+    fun searchInputValue(screenDump: String): String? {
+        return Regex(
+            "输入框:\\s*(?:\\[\\d+\\]\\s*)?(.*?)\\s*(?:\\{|\\[[^\\]]*])\\s*$",
+            RegexOption.MULTILINE
+        ).find(screenDump)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * 搜索提交后回到发现/热搜/历史页时，页面同名历史词会骗过 contains 判断；
+     * 只有输入框里的值仍等于目标，才算还持有搜索会话。
+     */
+    fun isSubmittedSearchDiscovery(screenDump: String, target: String): Boolean {
+        if (!isSearchInputContext(screenDump)) return false
+        val value = searchInputValue(screenDump) ?: return true
+        return normalizeSearchText(value).equals(normalizeSearchText(target), ignoreCase = true).not() &&
+            Regex("搜索历史|搜索发现|猜你想搜|热搜|热门搜索|完整榜单|最近搜索").containsMatchIn(screenDump)
+    }
+
+    /** 明确搜索控件才代表提交；普通结果项、历史词和发现卡不能触发等待窗口。 */
+    fun isSearchSubmitTap(screenDump: String, x: Int?, y: Int?): Boolean {
+        if (x == null || y == null || !isSearchInputContext(screenDump)) return false
+        val line = screenDump.lineSequence().firstOrNull { line ->
+            Regex("可点击:.*\\[$x,$y]|可点击:.*\\[${x + 1},$y]|可点击:.*\\[${x - 1},$y]")
+                .containsMatchIn(line)
+        } ?: return false
+        val label = line.substringBefore("{").trim()
+        return Regex("^(\\[?\\d+\\]?)?\\s*(搜索|查找|Search|Go|前往)$", RegexOption.IGNORE_CASE)
+            .containsMatchIn(label) || line.contains("{action_search", ignoreCase = true)
+    }
+
+    /** 搜索结果里的广告卡可读文本通常带营销标记；不是关闭控件就一律不能当第一个结果点。 */
+    fun isAdvertisementResultTap(vararg contexts: String): Boolean {
+        val text = contexts.joinToString(" ")
+        val marketing = Regex("(^|[\\s\\[\\{（(])(广告|赞助|推广|Ad|Sponsored)", RegexOption.IGNORE_CASE)
+        val installCta = Regex(
+            "下载并体验|下载应用|立即下载|下载安装|安装应用|免费下载|戳我下载|下载领\\d*金币"
+        )
+        val dismiss = Regex("关闭|跳过|取消|坚持退出|以后再说|不再提醒|免广告")
+        return (marketing.containsMatchIn(text) || installCta.containsMatchIn(text)) &&
+            !dismiss.containsMatchIn(text)
+    }
+
+    /**
+     * 搜索栏本身可能携带历史词/推荐词上下文，这些词不能否定“搜索入口”的用途。
+     * 只允许目标 App 在前台时放行，避免把外跳页里的搜索文案误当成安全入口。
+     */
+    fun isNativeSearchEntryLabel(label: String): Boolean {
+        return Regex(
+            "(?:^|[\\s/,，])(?:搜索栏|搜索|查找|Search)(?:[，,]|$|\\s|\\{)",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(label)
+    }
+
+    /** 搜索目标未出现前，点击取消/清空等于放弃任务，需要拦截纠正。 */
+    fun isSearchDismissTap(screenDump: String, x: Int?, y: Int?): Boolean {
+        if (x == null || y == null || !isSearchInputContext(screenDump)) return false
+        val target = screenDump.lineSequence()
+            .mapNotNull { line ->
+                Regex("可点击:\\s*(.+?)\\s*\\[(\\d+),(\\d+)]").find(line)?.let {
+                    Triple(
+                        it.groupValues[1].trim(),
+                        it.groupValues[2].toIntOrNull() ?: -999,
+                        it.groupValues[3].toIntOrNull() ?: -999
+                    )
+                }
+            }
+            .filter { (_, mx, my) -> mx in 0..999 && my in 0..999 }
+            .minByOrNull { (_, mx, my) -> (mx - x) * (mx - x) + (my - y) * (my - y) }
+            ?.takeIf { (_, mx, my) -> (mx - x) * (mx - x) + (my - y) * (my - y) <= 25 }
+            ?.first
+            ?.replace(Regex("^\\[\\d+]\\s*"), "")
+            ?.substringBefore("{")
+            ?.trim()
+            ?: return false
+        return Regex("^(取消|清空|关闭|以后再说|放弃)$").containsMatchIn(target)
     }
 
     /** 防卡死：连续 Wait 且读屏无变化的纠正轮次（达到后注入强纠正提示） */
@@ -717,12 +893,20 @@ object AgentEngine {
      */
     fun isPassiveVideoTask(task: String): Boolean {
         val text = task.replace(Regex("\\s+"), "")
-        val passiveMatch = Regex("(刷|看|浏览)(一)?(会|会儿|下|一下)?短?视频").find(text) ?: return false
+        // “刷1分钟视频”仍是刷视频；先剥离时长限定，避免时间词阻断被动视频识别。
+        val noDuration = text.replace(
+            Regex("(\\d+|[零一二两三四五六七八九十]+)(?:个)?(?:小时|个小时|分钟|分|秒)|半小时"),
+            ""
+        )
+        val passiveMatch = Regex("(刷|看|浏览)(一)?(会|会儿|下|一下)?短?视频").find(noDuration) ?: return false
         if (TaskCompletionVerifier.isExplicitAdRewardTask(text)) return false
         val explicitReward = Regex("做任务|任务中心|去赚钱|赚钱页|签到|开宝箱|宝箱|看直播")
+        val negation = Regex("不要|别|禁止|避免|不得|不是").find(text)
+        if (!explicitReward.containsMatchIn(text) &&
+            negation != null && negation.range.first < passiveMatch.range.first
+        ) return false
         if (!explicitReward.containsMatchIn(text)) return true
-        val negation = Regex("不要|别|禁止|避免|不得|不是").find(text) ?: return false
-        return passiveMatch.range.first > negation.range.first
+        return negation != null && passiveMatch.range.first > negation.range.first
     }
 
     /**
@@ -938,7 +1122,17 @@ object AgentEngine {
         val act = m.groupValues[1].trim()
         return when (act) {
             "Launch" -> {
-                val appName = str("app") ?: ""
+                val requestedAppName = str("app") ?: ""
+                val appName = if (a == null) requestedAppName else {
+                    DeviceTools.resolveApp(a, requestedAppName)?.first
+                        ?: allowedApp?.takeIf {
+                            AppAliases.isLaunchRequestForTarget(requestedAppName, userTask, it)
+                        }?.first
+                        ?: requestedAppName
+                }
+                if (a != null && requestedAppName.isNotBlank() && requestedAppName != appName) {
+                    android.util.Log.i("AIButler", "Launch resolved: $requestedAppName -> $appName")
+                }
                 val taskUrl = extractHttpUrl(userTask)
                 val requestedUrl = extractHttpUrl(appName)
                 val isRequestedBrowser = isBrowserLikeLaunch(appName) ||
@@ -976,20 +1170,36 @@ object AgentEngine {
                     correctedLabel
                 ).filter { it.isNotBlank() }.joinToString(" / ")
                 val cardContext = svc?.contextTextNear(p.first, p.second).orEmpty()
+                val searchTarget = namedActionTarget(userTask)
+                val taskWantsJump = Regex("更新|升级|下载|安装", RegexOption.IGNORE_CASE)
+                    .containsMatchIn(userTask)
+                if (searchTarget != null && !taskWantsJump &&
+                    isAdvertisementResultTap(nearbyLabel, cardContext)
+                ) {
+                    android.util.Log.i(
+                        "AIButler",
+                        "Blocked search advertisement tap: label=$nearbyLabel context=$cardContext"
+                    )
+                    return AglmResult(
+                        "🛑 已拦截搜索结果广告卡：${(nearbyLabel.ifBlank { cardContext }).take(100)}。" +
+                            "先向下滑过广告，再点击第一个不含广告标记的普通结果。",
+                        false,
+                        "__JUMP_BLOCK__"
+                    )
+                }
                 val targetAppMatched = allowedApp?.let { app ->
                     val normalizedLabel = app.first.replace(Regex("\\s+"), "")
                     val normalizedLabelAtPoint = nearbyLabel.replace(Regex("\\s+"), "")
                     normalizedLabelAtPoint == normalizedLabel ||
                         normalizedLabelAtPoint.contains(normalizedLabel) ||
                         normalizedLabel.contains(normalizedLabelAtPoint)
-                } == true
+                } == true || (allowedApp?.second?.let { pkg ->
+                    svc?.currentPackage() == pkg
+                } == true && isNativeSearchEntryLabel(nearbyLabel))
                 val jumpPattern = Regex(
                     "下载|安装|试玩|第三方|外部|跳转|网盘|立即更新|版本更新|去更新",
                     RegexOption.IGNORE_CASE
                 )
-                // 任务本身就是要下载/安装/更新时，入口命中这些词是正当操作，不能拦
-                val taskWantsJump = Regex("更新|升级|下载|安装", RegexOption.IGNORE_CASE)
-                    .containsMatchIn(userTask)
                 val normalizedPage = screenDump.orEmpty().replace(Regex("\\s+"), "")
                 // 激励广告倒计时活跃时，广告素材本身常带直播引流/下载条/抽奖文案：
                 // 三个页面级强退守卫都必须让路，否则会把已看时长作废（体检 P1-1/P2-4，与主循环 :2002 对齐）
@@ -1117,6 +1327,7 @@ object AgentEngine {
                 }
                 else if (!isExplicitDismiss && !neutralBottomNavigation &&
                     PageGuard.hasMissionVerbs(userTask) &&
+                    !PageGuard.isProductResearchCard(userTask, nearbyLabel, cardContext) &&
                     PageGuard.isOffMissionTap(userTask, nearbyLabel, cardContext)
                 ) {
                     android.util.Log.i(
@@ -1130,7 +1341,7 @@ object AgentEngine {
                         "__JUMP_BLOCK__"
                     )
                 }
-                else if (PageGuard.isForbiddenPayment(userTask, normalizedPage)) {
+                else if (PageGuard.isForbiddenPayment(userTask, screenDump.orEmpty())) {
                     android.util.Log.i("AIButler", "Blocked Tap on payment/order page")
                     AglmResult(
                         "🛑 已拦截商品确认/支付页点击。当前页面疑似会花钱。",
@@ -1419,18 +1630,14 @@ object AgentEngine {
         if (appName.isBlank() || userTask.isBlank()) return true
         // Bug#1b：先检查设备上是否真的安装了这个应用，不存在就不用浪费 LLM 调用
         val pm = a.packageManager
-        val appInstalled = try {
-            pm.getLaunchIntentForPackage(
-                pm.queryIntentActivities(
-                    Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0
-                ).firstOrNull { ri ->
-                    try { ri.loadLabel(pm).toString().equals(appName, ignoreCase = true) ||
-                        ri.loadLabel(pm).toString().contains(appName) ||
-                        appName.contains(ri.loadLabel(pm).toString())
-                    } catch (_: Exception) { false }
-                }?.activityInfo?.packageName ?: ""
-            ) != null
-        } catch (_: Exception) { false }
+        val resolvedApp = DeviceTools.resolveApp(a, appName)
+        val appInstalled = resolvedApp?.second?.let { pkg ->
+            try {
+                pm.getLaunchIntentForPackage(pkg) != null
+            } catch (_: Exception) {
+                false
+            }
+        } == true
         if (!appInstalled) {
             android.util.Log.i("AIButler", "confirmLaunch: app not installed locally: $appName")
             return false
@@ -1443,10 +1650,7 @@ object AgentEngine {
             return true
         }
         allowedApp?.let { app ->
-            val requested = appName.trim()
-            return requested.equals(app.first, ignoreCase = true) ||
-                requested.equals(app.second, ignoreCase = true) ||
-                requested.contains(app.first) || app.first.contains(requested)
+            return AppAliases.isLaunchRequestForTarget(appName, userTask, app)
         }
         DeviceTools.guessApp(a, userTask)?.let { requested ->
             return appName == requested.first || appName.contains(requested.first) || requested.first.contains(appName)
@@ -1700,7 +1904,7 @@ object AgentEngine {
                 val minute = s("minute").toIntOrNull()
                 if (hour == null || minute == null || hour !in 0..23 || minute !in 0..59) {
                     "hour/minute 参数无效（需要 hour 0-23、minute 0-59）。请把目标时间换算成 24 小时制后重试"
-                } else onUi(a) { DeviceTools.setAlarm(a, hour, minute, s("label")) }
+            } else DeviceTools.setAlarm(a, hour, minute, s("label"))
             }
             "cancel_alarm" -> onUi(a) {
                 DeviceTools.cancelAlarm(a, s("hour").toIntOrNull(), s("minute").toIntOrNull(), s("label"))

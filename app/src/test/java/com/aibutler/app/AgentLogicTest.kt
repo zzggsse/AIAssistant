@@ -112,6 +112,113 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 目标搜索_完整名称提示和通用目标抽取() {
+        val prompt = AgentEngine.autoGlmSystemPrompt()
+        assertTrue("缺少完整搜索词约定", prompt.contains("Type 必须输入用户说的完整目标名称"))
+        assertEquals("我的电脑", AgentEngine.namedActionTarget("打开QQ给“我的电脑”发送：AI助手测试消息"))
+        assertEquals("文件传输助手", AgentEngine.namedActionTarget("打开微信给文件传输助手发送：你好"))
+        assertEquals("AI助手", AgentEngine.namedActionTarget("打开B站搜索AI助手，然后播放第一个视频"))
+        assertEquals("保温杯", AgentEngine.namedActionTarget("打开淘宝搜索保温杯，然后找销量最高的商品"))
+    }
+
+    @Test
+    fun 发送任务_机械证据链解析() {
+        val goal = AgentEngine.parseMessageSendGoal("打开QQ给“我的电脑”发送：AI助手测试消息")
+        assertEquals(AgentEngine.MessageSendGoal("我的电脑", "AI助手测试消息"), goal)
+        assertEquals("AI助手测试消息", AgentEngine.parseAutoGlmTypeText("do(action=\"Type\", text=\"AI助手测试消息\")"))
+
+        val chatPage = "当前应用: com.any.social\n" +
+            "可点击: [6] 发送 {send_btn,Button} [852,511]\n" +
+            "输入框: [7] AI助手测试消息 {input,EditText} [499,511]"
+        assertTrue(
+            AgentEngine.isSendControlTap(
+                chatPage,
+                "do(action=\"Tap\", element=[852,511])"
+            )
+        )
+        assertFalse(
+            AgentEngine.isSendControlTap(
+                chatPage,
+                "do(action=\"Tap\", element=[499,511])"
+            )
+        )
+        val hiddenSendPage = "当前应用: com.any.social\n" +
+            "输入框: [7] AI助手测试消息 {input,EditText} [499,511]"
+        assertTrue(
+            AgentEngine.isMessageSendTapIntent(
+                hiddenSendPage,
+                "do(action=\"Tap\", element=[759,866])",
+                "消息已完整输入，点击键盘上的发送按钮。"
+            )
+        )
+        assertFalse(
+            AgentEngine.isMessageSendTapIntent(
+                hiddenSendPage,
+                "do(action=\"Tap\", element=[759,866])",
+                "输入框看起来已经生效，点击右侧确认图标。"
+            )
+        )
+        assertNull(AgentEngine.parseMessageSendGoal("打开淘宝搜索保温杯，然后找销量最高的商品"))
+    }
+
+    @Test
+    fun 目标搜索_目标未出现前拦截取消和清空() {
+        val searchPage = "当前应用: com.any.social\n" +
+            "输入框: [1] mde {edit,EditText} [419,87]\n" +
+            "可点击: [2] 清空 {clear,Button} [777,87]\n" +
+            "可点击: [3] 取消 {cancel,Button} [906,87]\n" +
+            "页面内容: 最近搜索"
+        assertTrue(AgentEngine.isSearchInputContext(searchPage))
+        assertTrue(AgentEngine.isSearchDismissTap(searchPage, 906, 87))
+        assertTrue(AgentEngine.isSearchDismissTap(searchPage, 777, 87))
+        // 目标结果出现后允许点结果，也不能把普通页面取消按钮误伤成搜索退出。
+        assertFalse(AgentEngine.isSearchDismissTap(searchPage, 499, 300))
+        val messagePage = "当前应用: com.any.social\n" +
+            "输入框: [1] 说点什么 {edit,EditText} [499,900]\n" +
+            "可点击: [2] 取消 {cancel,Button} [100,100]\n" +
+            "页面内容: 聊天"
+        assertFalse(AgentEngine.isSearchDismissTap(messagePage, 100, 100))
+    }
+
+    @Test
+    fun 目标搜索_提交后回到发现页必须重输而不是点历史词() {
+        val discoveryPage = "当前应用: com.any.search\n" +
+            "输入框: [1] ai视频小助理 {edit,EditText} [419,87]\n" +
+            "可点击: [2] 搜索 {action_search,TextView} [908,81]\n" +
+            "页面内容: bilibili热搜 搜索历史 搜索发现 AI助手 AI助手"
+        assertTrue(AgentEngine.isSubmittedSearchDiscovery(discoveryPage, "AI助手"))
+        assertTrue(AgentEngine.isSearchSubmitTap(discoveryPage, 908, 81))
+
+        val resultPage = "当前应用: com.any.search\n" +
+            "输入框: [1] AI助手 {edit,EditText} [419,87]\n" +
+            "可点击: [2] 搜索 {action_search,TextView} [908,81]\n" +
+            "可点击: [3] AI助手 视频教程 {,ViewGroup} [499,440]\n" +
+            "页面内容: 搜索结果"
+        assertFalse(AgentEngine.isSubmittedSearchDiscovery(resultPage, "AI助手"))
+    }
+
+    @Test
+    fun 目标搜索_广告结果卡拦截且关闭控件不误伤() {
+        assertTrue(AgentEngine.isAdvertisementResultTap("AI助手", "广告 Codex教程 下载应用"))
+        assertTrue(AgentEngine.isAdvertisementResultTap("AI助手", "赞助内容"))
+        assertTrue(AgentEngine.isAdvertisementResultTap("千问 点击了解更多", "立即下载"))
+        assertFalse(AgentEngine.isAdvertisementResultTap("关闭广告", "×"))
+        assertFalse(AgentEngine.isAdvertisementResultTap("AI助手 视频教程", "普通搜索结果"))
+    }
+
+    @Test
+    fun 目标应用内搜索栏_携带无关推荐词仍可作为搜索入口() {
+        // 目标 App 首页搜索栏旁边/内部常有历史推荐词；上下文含“安装”不代表搜索栏是下载入口。
+        assertTrue(
+            AgentEngine.isNativeSearchEntryLabel(
+                "搜索栏，按钮 / codex安装 / 搜索栏，按钮 {expand_search,LinearLayout}"
+            )
+        )
+        assertTrue(AgentEngine.isNativeSearchEntryLabel("搜索 {action_search,TextView}"))
+        assertFalse(AgentEngine.isNativeSearchEntryLabel("立即安装搜索工具 {download,Button}"))
+    }
+
+    @Test
     fun 链接任务_浏览器入口识别为任务目标而不是无关跳转() {
         val task = "open_url http://127.0.0.1:8000/order-test.html and tap Submit Order"
         assertEquals("http://127.0.0.1:8000/order-test.html", AgentEngine.extractHttpUrl(task))
@@ -246,6 +353,18 @@ class AgentLogicTest {
         assertTrue(PageGuard.isManualAuthPage("请输入手机号和验证码\n登录/注册"))
         assertFalse(PageGuard.isManualAuthPage("我的淘宝\n已登录账号\n待收货\n设置"))
         assertFalse(PageGuard.isManualAuthPage("搜索结果\n保温杯\n加入购物车"))
+    }
+
+    @Test
+    fun 安全守卫_已登录社交主页的登录通知不是登录墙() {
+        val socialHome = "当前应用: com.any.social.app 页面内容: 账户及设置 在线-WiFi " +
+            "消息 频道 联系人 动态 QQ安全中心 账号登录通知"
+        assertFalse(PageGuard.isManualAuthPage(socialHome))
+        val segmentedHome = "页面内容: 账户及设置 / 在线-WiFi / QQ安全中心 账号登录通知 / " +
+            "我的关联QQ账号 / 游戏消息 / 登录游戏领好礼 / 消息"
+        assertFalse(PageGuard.isManualAuthPage(segmentedHome))
+        assertTrue(PageGuard.isManualAuthPage("账号登录\n输入账号\n输入密码"))
+        assertTrue(PageGuard.isManualAuthPage("当前应用: com.any.app\n页面内容: 账号登录\n输入密码"))
     }
 
     @Test
@@ -385,6 +504,32 @@ class AgentLogicTest {
         assertEquals(3, TaskGoalVerifier.actionQuantityTarget("去快手极速版看3个广告刷金币", Regex("广告|激励|视频")))
         assertEquals(1, TaskGoalVerifier.actionQuantityTarget("看一个广告", Regex("广告|激励|视频")))
         assertEquals(null, TaskGoalVerifier.actionQuantityTarget("看广告赚金币", Regex("广告|激励|视频")))
+    }
+
+    @Test
+    fun 目标提取_时长目标按真实经过时间裁决() {
+        assertEquals(
+            TaskGoalVerifier.DurationGoal(60),
+            TaskGoalVerifier.parseDuration("去抖音极速版刷1分钟视频")
+        )
+        assertEquals(TaskGoalVerifier.DurationGoal(1800), TaskGoalVerifier.parseDuration("看半小时视频"))
+        assertEquals(TaskGoalVerifier.DurationGoal(5400), TaskGoalVerifier.parseDuration("刷1小时30分视频"))
+        assertNull(TaskGoalVerifier.parseDuration("去快手极速版看3个广告刷金币"))
+        assertNull(TaskGoalVerifier.parseDuration("帮我设一个明早7:30的闹钟"))
+    }
+
+    @Test
+    fun 被动视频识别_带时长限定仍按刷视频收口() {
+        // 带时间词后老识别会掉进普通有终点任务，模型就能在20秒时假称“刷了1分钟”
+        assertTrue(AgentEngine.isPassiveVideoTask("去抖音极速版刷1分钟视频"))
+        assertTrue(AgentEngine.isPassiveVideoTask("看半小时视频"))
+        assertFalse(AgentEngine.isPassiveVideoTask("不要刷视频了，回来"))
+    }
+
+    @Test
+    fun 路径回放_必须有总时长预算() {
+        // 53步路径按单步等待上限本应约2分钟；没有整条路径预算时，慢页面或反复等待会拖死开局
+        assertTrue(PathMemoryStore.REPLAY_TOTAL_BUDGET_MS in 120_000L..300_000L)
     }
 
     // ========== 历史压缩（体检第六轮 P3-3） ==========
@@ -779,6 +924,61 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_普通首页营销流不算支付订单页() {
+        val homeFeed = "当前应用: com.any.shop\n" +
+            "页面内容: 双11品类周 有券待使用 4张共136元 去使用\n" +
+            "可点击: 立即抢购 [500,340]\n" +
+            "可点击: 搜索 [860,118]\n" +
+            "可点击: 购物车 [820,910]"
+        assertFalse(PageGuard.isPaymentOrOrderPage(homeFeed))
+        assertFalse(PageGuard.isForbiddenPayment("搜索保温杯并找销量最高的商品", homeFeed))
+
+        val orderPage = "当前应用: com.any.shop\n" +
+            "页面内容: 应付金额 136元\n" +
+            "可点击: 提交订单 [500,910]"
+        assertTrue(PageGuard.isPaymentOrOrderPage(orderPage))
+    }
+
+    @Test
+    fun 页面防护_商品销量付款人数不等于付款按钮() {
+        val searchResult = "当前应用: com.any.shop\n" +
+            "页面内容: 搜索 / 怎么买\n" +
+            "可点击: 泰福高保温杯 116.00元 4000+人付款 [300,500]\n" +
+            "可点击: 乐扣乐扣保温杯 61.00元 6万+人付款 [300,900]"
+
+        assertFalse(PageGuard.isPaymentOrOrderPage(searchResult))
+        assertFalse(PageGuard.isForbiddenPayment("搜索保温杯并找销量最高的商品", searchResult))
+        assertFalse(PageGuard.isSensitiveButton("保温杯 116.00元 4000+人付款"))
+        assertFalse(PageGuard.isSensitiveButton("保温杯 116.00元 6万+人付款"))
+        assertTrue(PageGuard.isSensitiveButton("立即付款"))
+    }
+
+    @Test
+    fun 页面防护_商品研究结果卡可以点开核对销量() {
+        val task = "打开淘宝搜索保温杯，然后找销量最高的商品"
+        val label = "磨砂黑350ML保温杯 9.70元 2000+人付款"
+        val context = "$label / 更多 / 8年老店进店"
+
+        assertTrue(PageGuard.isProductResearchCard(task, label, context))
+        assertFalse(PageGuard.isSensitiveButton(label))
+        assertFalse(PageGuard.isProductResearchCard(task, "8年老店进店", "领取优惠券"))
+        assertFalse(PageGuard.isProductResearchCard("搜索保温杯并下单", label, context))
+    }
+
+    @Test
+    fun 页面防护_局部隐藏文案不等于隐私遮挡() {
+        val searchablePage = "当前应用: com.any.shop\n" +
+            "页面内容: 已隐藏 商品推荐\n" +
+            "可点击: 搜索 [500,118]\n" +
+            "可点击: 购物车 [820,910]"
+        assertFalse(PageGuard.isPrivacyOverlay(searchablePage))
+
+        val hiddenScreen = "当前应用: com.any.app\n" +
+            "页面内容: 屏幕共享画面已隐藏"
+        assertTrue(PageGuard.isPrivacyOverlay(hiddenScreen))
+    }
+
+    @Test
     fun 页面防护_订单确认按钮任何购物措辞都不豁免() {
         val labels = listOf(
             "提交订单", "确认订单", "确认下单", "立即购买",
@@ -1114,6 +1314,34 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 页面防护_搜索结果内嵌广告卡不算整页下载墙() {
+        val dump = "当前应用: com.any.video.app\n" +
+            "输入框: AI助手 {query,EditText} [420,160]\n" +
+            "可点击: 搜索 {action_search,TextView} [820,160]\n" +
+            "可点击: 综合 [72,250]\n" +
+            "可点击: 用户 [456,250]\n" +
+            "可点击: 直播 [772,250]\n" +
+            "页面内容: 相关搜索 AI工具 智能体\n" +
+            "可点击: AI激发孩子求知欲 {card,LinearLayout} [500,550]\n" +
+            "页面内容: UP 太帅而彼肘击 播放 61 10月19日\n" +
+            "可点击: 千问 点击了解更多 立即下载 {cta,Button} [756,790]\n" +
+            "页面内容: UP 编程大佬陈悠秀 共11集 1:34:36 播放 346.7万 6月7日"
+
+        assertTrue(PageGuard.isEmbeddedAdSearchResults(dump))
+        assertFalse("应留在搜索结果页并跳过广告卡", PageGuard.isDownloadWall(dump))
+    }
+
+    @Test
+    fun 页面防护_整屏下载墙不因零散结果词放行() {
+        val dump = "当前应用: com.any.reward.app\n" +
+            "页面内容: 热门应用 立即下载 点击了解更多\n" +
+            "可点击: 立即下载 {cta,Button} [500,840]"
+
+        assertFalse(PageGuard.isEmbeddedAdSearchResults(dump))
+        assertTrue(PageGuard.isDownloadWall(dump))
+    }
+
+    @Test
     fun 页面防护_活跃激励广告识别继续观看入口() {
         val dump = "当前应用: com.any.reward.app\n" +
             "页面内容: 广告 43秒后可领奖励 再看43秒可领奖励 +238金币\n" +
@@ -1347,6 +1575,28 @@ class AgentLogicTest {
         assertFalse("普通违规不应误报复读", note.contains("复读"))
     }
 
+    @Test
+    fun 协议恢复_模型识别弹窗但漏协议时优先关闭控件() {
+        val dump = "当前应用: com.any.shop\n" +
+            "页面内容: 活动弹窗 消费券\n" +
+            "可点击: 立即抢购 [500,500]\n" +
+            "可点击: 关闭按钮 [500,670]\n" +
+            "可点击: 返回 [80,120]"
+        val dismiss = AgentEngine.protocolRecoveryDismiss(
+            "当前状态：页面有弹窗。首先，我需要关闭这个弹窗。",
+            dump
+        )
+        assertEquals("关闭按钮", dismiss)
+
+        val plainPage = "当前应用: com.any.app\n页面内容: 普通列表"
+        assertNull(
+            AgentEngine.protocolRecoveryDismiss(
+                "当前状态：需要搜索目标。首先，我需要点击搜索框。",
+                plainPage
+            )
+        )
+    }
+
     // ========== 等待卡死熔断（真机抖音视频层 46+轮空转的回归） ==========
 
     @Test
@@ -1568,6 +1818,14 @@ class AgentLogicTest {
     }
 
     @Test
+    fun 商品页守卫_搜索比较类浏览任务可看详情但不豁免交易动作() {
+        assertTrue(PageGuard.isProductResearchTask("打开淘宝搜索保温杯，然后找销量最高的商品"))
+        assertTrue(PageGuard.isProductResearchTask("搜索蓝牙耳机，看看评价和价格"))
+        assertFalse(PageGuard.isProductResearchTask("搜索保温杯并加入购物车"))
+        assertFalse(PageGuard.isProductResearchTask("不要搜索了，回来"))
+    }
+
+    @Test
     fun 奖励倒计时_无语境的时分秒不误报() {
         // 视频时长/页顶时钟不再被当成奖励倒计时（体检 P2-3）
         assertNull(AgentEngine.rewardCountdownSeconds("看广告赚金币 视频时长 03:45"))
@@ -1668,6 +1926,55 @@ class AgentLogicTest {
         // 模型附带解释里出现“失败”不能覆盖 SUCCESS=true；字段冲突时不能污染经验库
         assertNull(TaskOutcomeJudge.parse("我判断任务失败，但忘了输出 SUCCESS 字段"))
         assertNull(TaskOutcomeJudge.parse("""{"SUCCESS":"unknown"}"""))
+    }
+
+    @Test
+    fun 经验裁决_机械确认成功不允许被模型改判失败() {
+        // 数量型广告任务机械计数达标、目标校验确认等强证据必须强制记成功（v1.13.4 回归）
+        assertEquals(true, ExperienceVerdict.resolve(targetNeverReached = false, verifiedByCheck = true))
+        // 目标应用从未到达时，即便其他证据模糊也不允许记成功
+        assertEquals(false, ExperienceVerdict.resolve(targetNeverReached = true, verifiedByCheck = true))
+    }
+
+    @Test
+    fun 经验裁决_目标未到达强制失败() {
+        assertEquals(false, ExperienceVerdict.resolve(targetNeverReached = true, verifiedByCheck = false))
+    }
+
+    @Test
+    fun 经验裁决_没有机械证据时交给模型判定() {
+        assertNull(ExperienceVerdict.resolve(targetNeverReached = false, verifiedByCheck = false))
+    }
+
+    @Test
+    fun 外跳陷阱坐标守卫_同一位置机械拦截() {
+        // 广告结算层的“免看广告立得金币”类入口实测会把页面拉出目标应用；
+        // 坐标桶按模型输出坐标分桶，同一按钮再次出现必须拦下（v1.13.5 回归）
+        val answer = "do(action=\"Tap\", element=[499,792])"
+        val bucket = JumpTrapGuard.bucketFromAnswer(answer)
+        assertEquals(JumpTrapGuard.bucketOf(499, 792), bucket)
+        assertTrue(JumpTrapGuard.isBlocked(bucket, setOf("33_52")))
+        // 相邻桶不误伤：别的按钮位置不受影响
+        assertFalse(JumpTrapGuard.isBlocked(JumpTrapGuard.bucketOf(520, 792), setOf("33_52")))
+        // 非 Tap 动作不拦
+        assertNull(JumpTrapGuard.bucketFromAnswer("do(action=\"Back\")"))
+        assertNull(JumpTrapGuard.bucketFromAnswer("do(action=\"Wait\", duration=\"10 seconds\")"))
+    }
+
+    @Test
+    fun 激励广告直播素材等待窗口_不少于60秒() {
+        // 直播带货类激励广告普遍 30-60 秒；等待窗口太短会在领奖前被直播间守卫误退（v1.13.5 回归）
+        assertTrue(PageGuard.REWARD_LIVE_EMBED_MAX_ROUNDS >= 12)
+    }
+
+    @Test
+    fun 重复滑动_页面变化是刷视频不是空转() {
+        // 抖音极速版实测：刷1分钟视频就是同方向连续滑动，每次都换新视频；
+        // 页面在变化就不能计入空转，否则任务会被6轮熔断误杀（v1.13.5 回归）
+        val sig = "s_33_46"
+        assertFalse(ActionProgress.repeatedSwipeIdle(sig, sig, pageChanged = true))
+        assertTrue(ActionProgress.repeatedSwipeIdle(sig, sig, pageChanged = false))
+        assertFalse(ActionProgress.repeatedSwipeIdle("s_33_45", sig, pageChanged = false))
     }
 
     @Test

@@ -30,9 +30,21 @@ object TaskGoalVerifier {
         val display = value + unit
     }
 
+    data class DurationGoal(val seconds: Int) {
+        val display: String
+            get() = when {
+                seconds % 3600 == 0 -> "${seconds / 3600}小时"
+                seconds >= 3600 -> "${seconds / 3600}小时${(seconds % 3600) / 60}分钟"
+                seconds % 60 == 0 -> "${seconds / 60}分钟"
+                seconds >= 60 -> "${seconds / 60}分${seconds % 60}秒"
+                else -> "${seconds}秒"
+            }
+    }
+
     data class TaskGoal(
         val time: TimeGoal? = null,
         val quantity: QuantityGoal? = null,
+        val duration: DurationGoal? = null,
         val absoluteDate: String? = null,
         val relativeDate: String? = null
     ) {
@@ -53,6 +65,7 @@ object TaskGoalVerifier {
         return TaskGoal(
             time = parseTime(userText),
             quantity = parseQuantity(userText),
+            duration = parseDuration(userText),
             absoluteDate = parseAbsoluteDate(userText),
             relativeDate = parseRelativeDate(userText)
         )
@@ -219,6 +232,31 @@ object TaskGoalVerifier {
         val m = Regex("(\\d+|[零一二两三四五六七八九十]+)个(?=" + noun.pattern + ")").find(text)
             ?: return null
         return number(m.groupValues[1])
+    }
+
+    /**
+     * 提取「刷1分钟视频/看半小时直播」这类动作时长目标。
+     * 时长不能用屏幕上的数字当完成证据：视频标题、倒计时、弹幕都可能带数字，
+     * 必须由执行器按真实经过时间裁决。
+     */
+    fun parseDuration(raw: String): DurationGoal? {
+        val text = raw.replace(Regex("\\s+"), "")
+        if (Regex("半小时").containsMatchIn(text)) return DurationGoal(1800)
+
+        var totalSeconds = 0
+        val pattern = Regex(
+            "(\\d+|[零一二两三四五六七八九十]+)(?:个)?(小时|分钟|分|秒)"
+        )
+        for (match in pattern.findAll(text)) {
+            val value = number(match.groupValues[1]) ?: continue
+            val seconds = when (match.groupValues[2]) {
+                "小时" -> value * 3600
+                "分钟", "分" -> value * 60
+                else -> value
+            }
+            if (seconds > 0) totalSeconds += seconds
+        }
+        return totalSeconds.takeIf { it > 0 }?.let(::DurationGoal)
     }
 
     private fun parseAbsoluteDate(raw: String): String? {

@@ -7,6 +7,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
 import android.provider.CalendarContract
 import android.net.Uri
 import android.provider.AlarmClock
@@ -49,6 +51,10 @@ object DeviceTools {
         val pm = a.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val normalizedText = text.lowercase().replace("\\s+".toRegex(), "")
+        // “B站搜索AI助手”里目标名和普通词混在一起，明确别名必须先于子串模糊匹配。
+        AppAliases.findInText(text)?.let { canonical ->
+            resolveApp(a, canonical)?.let { return it }
+        }
         data class Candidate(val label: String, val pkg: String, val score: Int)
         val candidates = pm.queryIntentActivities(intent, 0).mapNotNull { ri ->
             val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { null } ?: return@mapNotNull null
@@ -128,7 +134,7 @@ object DeviceTools {
         if (name.isBlank()) return null
         val pm = a.packageManager
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val q = name.lowercase().trim()
+        val q = (AppAliases.canonicalLabel(name) ?: name).lowercase().trim()
         data class Cand(val label: String, val pkg: String, val score: Int)
         return pm.queryIntentActivities(intent, 0).mapNotNull { ri ->
             val label = try { ri.loadLabel(pm).toString() } catch (_: Exception) { null }
@@ -192,14 +198,57 @@ object DeviceTools {
                 ?.activityInfo?.packageName
         }.getOrNull()
         return try {
-            a.startActivity(i)
-            val opened = showAlarmScreen(a, alarmPackage)
-            "已设置 %02d:%02d 的闹钟%s%s".format(
+            // 后台线程发 startActivity 会被部分 ROM 静默拦截；但等待时钟加载必须在任务线程做。
+            val startLatch = java.util.concurrent.CountDownLatch(1)
+            var opened = false
+            var startError: Exception? = null
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    a.startActivity(i)
+                    opened = showAlarmScreen(a, alarmPackage)
+                } catch (e: Exception) {
+                    startError = e
+                } finally {
+                    startLatch.countDown()
+                }
+            }
+            if (!startLatch.await(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                return "设置闹钟超时：时钟页面没有启动"
+            }
+            startError?.let { throw it }
+            val enabled = AssistantAccessibilityService.instance?.ensureAlarmEnabled(
+                hour,
+                minute,
+                label,
+            ) ?: "NO_ACCESSIBILITY"
+            val timeLabel = "%02d:%02d 的闹钟%s".format(
                 hour,
                 minute,
                 if (label.isNotBlank()) "（$label）" else "",
-                if (opened) "，并已打开时钟应用" else ""
             )
+            return when (enabled) {
+                "ENABLED", "TOGGLED" ->
+                    "已设置 $timeLabel，并确认闹钟已开启${if (opened) "，时钟列表已打开" else ""}"
+                "NO_ACCESSIBILITY" ->
+                    "已发出设闹钟请求，但无法读取时钟结果。请开启无障碍服务后重试，否则闹钟可能没有启用"
+                "NOT_FOUND" -> {
+                    val uiResult = AssistantAccessibilityService.instance?.createAlarmThenEnable(
+                        hour,
+                        minute,
+                        label,
+                    ) ?: "NO_ACCESSIBILITY"
+                    when (uiResult) {
+                        "ENABLED", "TOGGLED" ->
+                            "已设置 $timeLabel，并确认闹钟已开启${if (opened) "，时钟列表已打开" else ""}"
+                        "NO_ACCESSIBILITY" ->
+                            "已发出设闹钟请求，但无法读取时钟结果。请开启无障碍服务后重试，否则闹钟可能没有启用"
+                        else ->
+                            "已尝试通过时钟页面创建 $timeLabel，但系统没有确认成功。请打开时钟手动确认，避免静默失败"
+                    }
+                }
+                else ->
+                    "已创建 $timeLabel，但它仍处于关闭状态。请打开时钟手动打开开关"
+            }
         } catch (e: Exception) {
             "设置闹钟失败：${e.message}"
         }
@@ -317,27 +366,33 @@ object DeviceTools {
     private fun showAlarmScreen(a: Activity, alarmPackage: String?): Boolean {
         val clockPackage = findClockPackage(a) ?: alarmPackage
         val candidates = listOfNotNull(clockPackage, alarmPackage).distinct()
+        var explicitOpened = false
 
         // 某些 ROM 会忽略无包名的 SHOW_ALARMS；先对真实时钟包显式发送。
         for (pkg in candidates) {
             val explicit = Intent(AlarmClock.ACTION_SHOW_ALARMS)
                 .setPackage(pkg)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (runCatching { a.startActivity(explicit) }.isSuccess) return true
+            if (runCatching { a.startActivity(explicit) }.isSuccess) {
+                explicitOpened = true
+                break
+            }
         }
 
-        val genericShow = Intent(AlarmClock.ACTION_SHOW_ALARMS)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (runCatching { a.startActivity(genericShow) }.isSuccess) return true
-
-        // 最后一层：直接启动时钟应用的 Launcher Activity，保证用户至少能看到目标 App。
+        // 部分 ROM 的 SHOW_ALARMS 会先经过中转页，读不到闹钟行。再走启动器主入口，
+        // 让时钟落在普通列表页；这样复核开关才有稳定的通用页面入口。
         for (pkg in candidates) {
             val launch = runCatching { a.packageManager.getLaunchIntentForPackage(pkg) }
                 .getOrNull() ?: continue
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             if (runCatching { a.startActivity(launch) }.isSuccess) return true
         }
-        return false
+
+        val genericShow = Intent(AlarmClock.ACTION_SHOW_ALARMS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (runCatching { a.startActivity(genericShow) }.isSuccess) return true
+
+        return explicitOpened
     }
 
     /** 从真实启动器列表里找出时钟应用，避免写死某个厂商包名。 */

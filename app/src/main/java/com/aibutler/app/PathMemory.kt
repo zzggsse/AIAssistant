@@ -40,6 +40,7 @@ data class ReplayResult(
  */
 object PathMemoryStore {
     private const val TAG = "PathMemory"
+    const val REPLAY_TOTAL_BUDGET_MS = 180_000L
     private val gson = Gson()
     private val type = object : TypeToken<MutableList<RecordedPath>>() {}.type
 
@@ -152,6 +153,7 @@ object PathMemoryStore {
         val svc = AssistantAccessibilityService.instance
         if (svc == null) return ReplayResult(false, 0, -1, "无障碍服务未开启，无法回放")
         if (path.steps.isEmpty()) return ReplayResult(false, 0, -1, "路径为空")
+        val startedAtMs = System.nanoTime() / 1_000_000
 
         Log.i(TAG, "开始回放路径：${path.targetAppName}，共${path.steps.size}步")
 
@@ -168,6 +170,14 @@ object PathMemoryStore {
 
         stepLoop@ for ((idx, step) in path.steps.withIndex()) {
             if (cancelCheck()) return ReplayResult(false, idx, idx, "用户取消")
+            if (System.nanoTime() / 1_000_000 - startedAtMs >= REPLAY_TOTAL_BUDGET_MS) {
+                return ReplayResult(
+                    false,
+                    idx,
+                    idx,
+                    "路径回放超过${REPLAY_TOTAL_BUDGET_MS / 1000}秒总预算，已放弃缓存路径"
+                )
+            }
             val (curFp, curPkg) = svc.currentPageFingerprint()
 
             // 指纹校验：优先精确回放；按钮文字仍可见时按文字自适应一次，避免小改版导致整条记忆作废
@@ -182,6 +192,14 @@ object PathMemoryStore {
                     return ReplayResult(false, idx, idx, "第${idx + 1}步页面指纹不匹配，且找不到「${step.actionLabel}」")
                 }
                 AgentEngine.waitForActionSettle(toSettleAction(step.actionType), curFp)
+                if (System.nanoTime() / 1_000_000 - startedAtMs >= REPLAY_TOTAL_BUDGET_MS) {
+                    return ReplayResult(
+                        false,
+                        idx,
+                        idx,
+                        "路径回放超过${REPLAY_TOTAL_BUDGET_MS / 1000}秒总预算，已放弃缓存路径"
+                    )
+                }
                 val (adaptedFp, _) = svc.currentPageFingerprint()
                 if (adaptedFp == curFp) {
                     return ReplayResult(false, idx, idx, "第${idx + 1}步自适应点击后页面没有变化")
@@ -225,6 +243,14 @@ object PathMemoryStore {
 
             // 等页面稳定后再校验目标指纹
             AgentEngine.waitForActionSettle(toSettleAction(step.actionType), curFp)
+            if (System.nanoTime() / 1_000_000 - startedAtMs >= REPLAY_TOTAL_BUDGET_MS) {
+                return ReplayResult(
+                    false,
+                    idx,
+                    idx,
+                    "路径回放超过${REPLAY_TOTAL_BUDGET_MS / 1000}秒总预算，已放弃缓存路径"
+                )
+            }
             if (step.targetFingerprint.isNotBlank()) {
                 val (newFp, _) = svc.currentPageFingerprint()
                 if (newFp != step.targetFingerprint) {

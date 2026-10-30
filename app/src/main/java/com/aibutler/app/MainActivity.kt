@@ -760,7 +760,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     val result = AgentEngine.execute(this, "set_alarm", args.toString())
                     runOnUiThread {
-                        adapter.add(ChatAdapter.Msg("assistant", "✅ $result"))
+                        val success = result.startsWith("已设置 ") && result.contains("确认闹钟已开启")
+                        val prefix = if (success) "✅ " else "⚠️ "
+                        adapter.add(ChatAdapter.Msg("assistant", "$prefix$result"))
                         rv.scrollToPosition(adapter.items.size - 1)
                     }
                     return@Thread
@@ -1492,6 +1494,7 @@ class MainActivity : AppCompatActivity() {
             var lastCardPkg = ""            // 该卡所在的应用包名
             var lastCardRound = -99         // 点击发生在第几轮（6轮内出现证据才记账）
             val jumpTrapLabels = LinkedHashSet<String>() // 本任务内实测会跳出目标App的入口标签（规范化后）
+            val blockedTapBuckets = HashSet<String>()    // 本任务内实测会跳出目标App的点击坐标桶（文字守卫的兜底）
             var targetAppPackage: String? = null
             targetAppPackage = guessedApp?.second
             // 冷启动目标App：上一轮任务可能把它留在任意深层页面（实测：死在拍摄页污染下一轮开局）
@@ -1517,8 +1520,18 @@ class MainActivity : AppCompatActivity() {
             val completion = TaskCompletionVerifier.contractFor(userText, guessedApp, Prefs.openEndedSessionMinutes(this))
             var sessionStartMs = android.os.SystemClock.elapsedRealtime()
             val boundedStartMs = sessionStartMs
+            val durationTargetSeconds = taskGoal.duration?.seconds
+            var durationWatchStartMs: Long? = null
             var launchFinishRejects = 0
             var verifiedByCheck = false
+            val searchTarget = AgentEngine.namedActionTarget(userText)
+            var searchTargetVisible = false
+            var searchSubmitWaitUntilMs = 0L
+            var searchSubmitted = false
+            val messageSendGoal = AgentEngine.parseMessageSendGoal(userText)
+            var pendingMessageBody: String? = null
+            var messageSendConfirmed = false
+            var messageSendFinishRejects = 0
             android.util.Log.i("AIButler", "AGLM completion: class=${completion.taskClass} check=${completion.successCheck}")
             var prevTapCoords: Pair<Int, Int>? = null
             var waitStallCount = 0
@@ -1550,9 +1563,17 @@ class MainActivity : AppCompatActivity() {
             val actionTrace = LinkedHashSet<String>()
             // ===== 路径记忆：录制 + 回放 =====
             val recordingSteps = ArrayList<PageStep>()
+            // 有精确约束或开放目标的任务不能“执行过路径”就宣称完成；
+            // 路径记忆只服务确定终点的简单任务，复杂目标必须重新走机械/AI裁决。
+            val replayAllowed = completion.taskClass == TaskCompletionVerifier.TaskClass.BOUNDED &&
+                !taskGoal.hasConstraint
             // 启动前尝试回放已验证路径；失败后自动降级到AI探索。
             run {
-                val matchedPath = PathMemoryStore.findMatch(this, userText, guessedApp?.second)
+                val matchedPath = if (replayAllowed) {
+                    PathMemoryStore.findMatch(this, userText, guessedApp?.second)
+                } else {
+                    null
+                }
                 if (matchedPath != null) {
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg("system", "⚡ 检测到缓存路径（${matchedPath.targetAppName}，${matchedPath.steps.size}步），正在快速回放…"))
@@ -1616,6 +1637,12 @@ class MainActivity : AppCompatActivity() {
                     visitedPackages.add(foregroundCheck.pkg)
                     finalReply = "✅ 已完成：${foregroundCheck.appName} 已打开（已验证应用在前台）"
                     android.util.Log.i("AIButler", "AGLM hard-check complete: ${foregroundCheck.pkg} round=$round")
+                    break
+                }
+                if (messageSendGoal != null && messageSendConfirmed) {
+                    verifiedByCheck = true
+                    finalReply = "✅ 已完成：消息「${messageSendGoal.body}」已点击发送"
+                    android.util.Log.i("AIButler", "AGLM message send complete: round=$round")
                     break
                 }
                 if (completion.taskClass == TaskCompletionVerifier.TaskClass.OPEN_ENDED) {
@@ -1797,14 +1824,40 @@ class MainActivity : AppCompatActivity() {
                 }
                 val screenDump = AssistantAccessibilityService.instance?.dumpScreenForAutoGLM()
                     ?: "当前应用: $appPkg\n无法读取页面结构"
+                searchTargetVisible = searchTarget != null && screenDump.contains(searchTarget)
+                val passiveVideoTask = AgentEngine.isPassiveVideoTask(userText)
+                if (passiveVideoTask && durationTargetSeconds != null &&
+                    durationWatchStartMs == null && guessedApp?.second == appPkg
+                ) {
+                    durationWatchStartMs = android.os.SystemClock.elapsedRealtime()
+                }
+                if (durationTargetSeconds != null && durationWatchStartMs != null) {
+                    val watchElapsedMs = android.os.SystemClock.elapsedRealtime() - durationWatchStartMs
+                    if (watchElapsedMs >= durationTargetSeconds * 1000L) {
+                        android.util.Log.i(
+                            "AIButler",
+                            "AGLM duration target reached: ${watchElapsedMs / 1000}s/$durationTargetSeconds"
+                        )
+                        verifiedByCheck = true
+                        finalReply = "✅ 已完成：已按系统计时刷满${taskGoal.duration?.display}。"
+                        break
+                    }
+                }
+                val durationNote = if (passiveVideoTask && durationTargetSeconds != null) {
+                    val elapsedMs = durationWatchStartMs?.let { android.os.SystemClock.elapsedRealtime() - it } ?: 0L
+                    val leftSeconds = (durationTargetSeconds - (elapsedMs / 1000L)).coerceAtLeast(0L)
+                    if (durationWatchStartMs == null) {
+                        "\n⏱️ 系统计时：进入目标应用后才开始计算${taskGoal.duration?.display}；完成与否以系统计时为准。"
+                    } else {
+                        "\n⏱️ 系统计时：已刷${TaskCompletionVerifier.formatDuration(elapsedMs)}，还差${TaskCompletionVerifier.formatDuration(leftSeconds * 1000L)}。" +
+                            "不要凭感觉 finish；计时满后系统会自动收口。"
+                    }
+                } else ""
                 // Set-of-Marks：给可点击/输入框行加编号，供截图角标与模型对照。
                 // 屏幕信息展示用带编号版；执行链路（纠偏/校验/守卫）仍用原始 screenDump，互不影响。
                 val (markedDump, screenMarks) = AgentEngine.annotateAutoGlmDump(screenDump)
                 // Bug#6：系统隐私遮挡（ColorOS投屏抹黑）时视觉脑完全不可用，立即终止
-                val privacyHidden = screenDump.contains("已隐藏") ||
-                    screenDump.contains("画面被隐藏") ||
-                    screenDump.contains("屏幕共享画面已隐藏")
-                if (privacyHidden) {
+                if (PageGuard.isPrivacyOverlay(screenDump)) {
                     android.util.Log.i("AIButler", "AGLM privacy overlay detected, stopping")
                     finalReply = "该应用受系统隐私保护，视觉脑无法读取屏幕内容。请手动操作该应用，或在系统设置中关闭隐私遮挡。"
                     break
@@ -1822,10 +1875,12 @@ class MainActivity : AppCompatActivity() {
                         "AIButler",
                         "AGLM quantified-ad target reached: $adRewardCompletions/$quantifiedAdTarget"
                     )
+                    verifiedByCheck = true
                     finalReply = "✅ 已完成：系统确认看完了 ${quantifiedAdTarget} 个广告的领取结算。"
                     break
                 }
-                if (PageGuard.isManualAuthPage(compactGuardDump)) {
+                // 登录墙判断必须保留换行/分段边界；compactGuardDump 已把整页消息压成一行。
+                if (PageGuard.isManualAuthPage(screenDump)) {
                     android.util.Log.i("AIButler", "AGLM manual auth page detected, stopping")
                     runOnUiThread {
                         adapter.add(ChatAdapter.Msg(
@@ -1839,7 +1894,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 倒计时读数提前到页面级守卫之前：激励广告倒计时活跃时，直播间/下载墙/活动页守卫都要让路，
                 // 否则广告素材自带的直播引流/下载条/抽奖文案会触发强退、作废已看时长（体检 P2-4/P1-1）
-                val passiveVideoTask = AgentEngine.isPassiveVideoTask(userText)
                 if (!passiveVideoTask && PageGuard.isRewardTask(userText) &&
                     PageGuard.hasRewardAdEntry(compactGuardDump)
                 ) {
@@ -1854,7 +1908,7 @@ class MainActivity : AppCompatActivity() {
                 val rewardAdLiveEmbed = !passiveVideoTask &&
                     PageGuard.isRecentRewardEntry(lastRewardEntryRound, round) &&
                     !PageGuard.hasExplicitLiveExit(compactGuardDump) &&
-                    rewardLiveEmbedRounds < 3
+                    rewardLiveEmbedRounds < PageGuard.REWARD_LIVE_EMBED_MAX_ROUNDS
                 if (rewardCountdownSeconds == null && rewardAdLiveEmbed &&
                     !PageGuard.hasRewardCompletion(compactGuardDump) &&
                     PageGuard.isUnintendedLiveRoom(userText, compactGuardDump)
@@ -1903,7 +1957,7 @@ class MainActivity : AppCompatActivity() {
                     Thread.sleep(1500)
                     continue
                 }
-                if (PageGuard.isForbiddenPayment(userText, compactGuardDump)) {
+                if (PageGuard.isForbiddenPayment(userText, screenDump)) {
                     AssistantAccessibilityService.instance?.pressBack()
                     android.util.Log.i("AIButler", "AGLM force back from payment/order page")
                     runOnUiThread {
@@ -1942,8 +1996,10 @@ class MainActivity : AppCompatActivity() {
                     "加入购物车|购买数量|立即抢购|立即购买|去支付|提交订单|确认订单",
                     RegexOption.IGNORE_CASE
                 ).containsMatchIn(compactGuardDump)
-                // 购物任务豁免统一走 PageGuard.isCommerceTask：老词表缺「买」，「买杯奶茶」被反复按返回（体检 P1-6）
-                if (commerceTaskPage && !PageGuard.isCommerceTask(userText)) {
+                // 商品页守卫放行明确交易任务和搜索/比较类浏览任务；后者仍由敏感按钮红线拦交易点击。
+                val pageGuardAllowed =
+                    PageGuard.isCommerceTask(userText) || PageGuard.isProductResearchTask(userText)
+                if (commerceTaskPage && !pageGuardAllowed) {
                     android.util.Log.i("AIButler", "AGLM force back from commerce task page")
                     AssistantAccessibilityService.instance?.pressBack()
                     runOnUiThread {
@@ -2208,6 +2264,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 📵 下载墙页：这类广告页会自动触发APK下载/安装（用户投诉「老安装软件」的元凶），绝不停留。
                 // 但活跃激励广告例外：奖励倒计时存在时提前 Back 会作废已看时长；应等待或点「继续观看」。
+                if (searchTarget != null &&
+                    appPkg == targetAppPackage &&
+                    android.os.SystemClock.elapsedRealtime() < searchSubmitWaitUntilMs &&
+                    screenDump.contains("正在加载")
+                ) {
+                    android.util.Log.i("AIButler", "AGLM targeted search loading; defer exit guard")
+                    Thread.sleep(1200)
+                    continue
+                }
                 if (PageGuard.isDownloadWall(compactGuardDump) && rewardCountdownSeconds == null) {
                     if (lastCardLabel.isNotBlank() && appPkg == lastCardPkg && round - lastCardRound <= 6) {
                         TaskCardMemory.mark(this, appPkg, lastCardLabel, good = false)
@@ -2372,6 +2437,8 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (trapLabel.isNotBlank()) jumpTrapLabels.add(TaskCardMemory.normalizeLabel(trapLabel))
                     AgentEngine.markLastClickBad()
+                    // 文字守卫可能记到「无文字元素」这类泛化标签，坐标桶是更可靠的机械记忆
+                    if (lastTapBucket.isNotBlank()) blockedTapBuckets.add(lastTapBucket)
                     lastCardLabel = ""
                     wrongAppReturns++
                     val recovery = if (!unguidedMode) {
@@ -2509,7 +2576,7 @@ class MainActivity : AppCompatActivity() {
                 val markNote = if (screenMarks.isEmpty()) ""
                     else "\n🎯 本轮截图已叠加蓝色数字角标（共${screenMarks.size}个）：角标=可点击/输入框元素的编号，与关键元素行首的[N]一一对应。" +
                         "要点击带角标的元素，Tap 坐标就是角标中心（即该元素中心）；编号绝不能当坐标输出；没有角标的元素仍按截图位置输出。"
-                val screenInfo = "$feedbackLine$appIdentityNote$markedDump$countdownNote$doneNote$cardNote$trapNote$adAnchorNote$pickerNote$pickerTargetAdvise$goalNote$markNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
+                val screenInfo = "$feedbackLine$appIdentityNote$markedDump$countdownNote$doneNote$cardNote$trapNote$adAnchorNote$pickerNote$pickerTargetAdvise$goalNote$durationNote$markNote\n(截图是最新页面；所有Tap/Swipe坐标必须用0-999)" +
                     "\n坐标规则：Tap坐标只能来自截图目标中心；不要抄“关键元素”里的坐标。截图上明显存在但关键元素没列出的按钮，也必须按截图位置输出。" +
                     retryNote +
                     "$taskNote\n输出要求：先输出<think>一句话说明当前是什么页面、目标元素在哪、为什么选这个动作（120字以内）</think>，再输出一个动作。"
@@ -2554,6 +2621,33 @@ class MainActivity : AppCompatActivity() {
                 } else if (protocolMatch == null && fallbackAction != null) {
                     answer = fallbackAction.value.trim()
                 } else if (protocolMatch == null) {
+                    val beforeRecoveryFp = AssistantAccessibilityService.instance?.currentPageFingerprint()?.first
+                    val recoveryDismiss = AgentEngine.protocolRecoveryDismiss(raw, screenDump)
+                    val recoveryClicked = recoveryDismiss?.let {
+                        AssistantAccessibilityService.instance?.clickText(it)
+                    }?.startsWith("已") == true
+                    if (recoveryClicked) {
+                        Thread.sleep(1000)
+                        val afterRecoveryFp =
+                            AssistantAccessibilityService.instance?.currentPageFingerprint()?.first
+                        if (afterRecoveryFp != null && afterRecoveryFp != beforeRecoveryFp) {
+                            parseFails = 0
+                            retryNote = AgentEngine.protocolRetryNote(raw)
+                            android.util.Log.i(
+                                "AIButler",
+                                "AGLM protocol recovery dismissed overlay via $recoveryDismiss"
+                            )
+                            ctx.add(JsonObject().apply {
+                                addProperty("role", "user")
+                                addProperty(
+                                    "content",
+                                    "🪟 系统提示：你说要处理弹窗但没有输出动作协议。系统已按通用规则点击明确关闭控件「$recoveryDismiss」。" +
+                                        "下一轮不要描述步骤，必须直接输出一个完整动作。"
+                                )
+                            })
+                            continue
+                        }
+                    }
                     parseFails++
                     android.util.Log.i("AIButler", "AGLM protocol violation: ${raw.take(180)}")
                     if (Prefs.evalLog(this)) EvalLogger.log(this, JsonObject().apply {
@@ -2579,7 +2673,102 @@ class MainActivity : AppCompatActivity() {
                     else -> ""
                 }
                 if (protocolMatch == null && fallbackAction != null && !answer.endsWith(")")) answer += ")"
-                if (passiveVideoTask && answer.startsWith("finish", ignoreCase = true)) {
+                val expectedMessageBody = messageSendGoal?.body
+                val messageType = if (expectedMessageBody != null) AgentEngine.parseAutoGlmTypeText(answer) else null
+                if (messageType != null) {
+                    pendingMessageBody = messageType.takeIf {
+                        it == expectedMessageBody
+                    }
+                }
+                if (pendingMessageBody != null && pendingMessageBody == expectedMessageBody &&
+                    AgentEngine.isMessageSendTapIntent(screenDump, answer, raw)
+                ) {
+                    android.util.Log.i("AIButler", "AGLM message send tap armed")
+                }
+                // 目标搜索通用纠偏：完整名称优先，搜索未出目标前不允许用取消/清空来“提交”。
+                val searchTypeMatch = Regex(
+                    "action\\s*=\\s*\"Type\"\\s*,\\s*text\\s*=\\s*\"((?:\\\\.|[^\"\\\\])*)\"",
+                    RegexOption.IGNORE_CASE
+                ).find(answer)
+                if (searchTarget != null && searchSubmitted &&
+                    AgentEngine.isSubmittedSearchDiscovery(screenDump, searchTarget)
+                ) {
+                    searchSubmitted = false
+                    answer = "do(action=\"Type\", text=\"$searchTarget\")"
+                    android.util.Log.i("AIButler", "AGLM recovered submitted search discovery: $searchTarget")
+                    ctx.add(JsonObject().apply {
+                        addProperty(
+                            "role",
+                            "user"
+                        )
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：搜索已经提交过，但页面回到搜索历史/发现页，说明结果会话丢了。" +
+                                "这里的同名历史词不是结果，不能点击。已改为重新输入完整目标「$searchTarget」；" +
+                                "下一轮只点击明确的搜索控件，看到真实结果列表后再点结果。"
+                        )
+                    })
+                    continue
+                }
+                if (searchTarget != null && searchTypeMatch != null &&
+                    AgentEngine.isSearchInputContext(screenDump)
+                ) {
+                    val typed = searchTypeMatch.groupValues[1]
+                    if (!AgentEngine.normalizeSearchText(typed)
+                        .equals(AgentEngine.normalizeSearchText(searchTarget), ignoreCase = true)
+                    ) {
+                        answer = "do(action=\"Type\", text=\"$searchTarget\")"
+                        android.util.Log.i("AIButler", "AGLM forced full search target: $searchTarget")
+                        ctx.add(JsonObject().apply {
+                            addProperty(
+                                "role", "user"
+                            )
+                            addProperty(
+                                "content",
+                                "🛑 系统提示：搜索/查找必须输入完整目标名称「$searchTarget」，不要用缩写或猜测词。已改写你的输入；下一轮观察真实结果后再点明确匹配的目标项。"
+                            )
+                        })
+                        continue
+                    }
+                    searchSubmitWaitUntilMs = android.os.SystemClock.elapsedRealtime() + 10_000L
+                }
+                val searchTapMatch = Regex(
+                    "Tap[^\\]]*element=\\[(-?\\d+)\\s*,\\s*(-?\\d+)\\]",
+                    RegexOption.IGNORE_CASE
+                ).find(answer)
+                if (searchTarget != null && searchTapMatch != null &&
+                    AgentEngine.isSearchSubmitTap(
+                        screenDump,
+                        searchTapMatch.groupValues[1].toIntOrNull(),
+                        searchTapMatch.groupValues[2].toIntOrNull()
+                    )
+                ) {
+                    searchSubmitted = true
+                    searchSubmitWaitUntilMs = android.os.SystemClock.elapsedRealtime() + 20_000L
+                }
+                if (searchTarget != null && !searchTargetVisible && searchTapMatch != null &&
+                    AgentEngine.isSearchDismissTap(
+                        screenDump,
+                        searchTapMatch.groupValues[1].toIntOrNull(),
+                        searchTapMatch.groupValues[2].toIntOrNull()
+                    )
+                ) {
+                    answer = "do(action=\"Type\", text=\"$searchTarget\")"
+                    android.util.Log.i("AIButler", "AGLM blocked search dismissal before target visible")
+                    ctx.add(JsonObject().apply {
+                        addProperty(
+                            "role", "user"
+                        )
+                        addProperty(
+                            "content",
+                            "🛑 系统提示：目标「$searchTarget」还没有出现在结果里，取消/清空不能提交搜索。已改为重新输入完整目标；下一轮点击明确匹配目标的结果项。"
+                        )
+                    })
+                    continue
+                }
+                if (passiveVideoTask && durationTargetSeconds == null &&
+                    answer.startsWith("finish", ignoreCase = true)
+                ) {
                     answer = "do(action=\"Swipe\", start=[500,650], end=[500,300])"
                     retryNote = "\n⚠️ 系统提示：普通刷视频是开放任务，没有明确数量或时间目标时不能 finish。" +
                         "已改为上滑观看下一段视频；继续保持 Swipe → Wait 循环。"
@@ -2788,6 +2977,25 @@ class MainActivity : AppCompatActivity() {
                     continue
                 }
                 if (answer.startsWith("finish")) {
+                    if (messageSendGoal != null && !messageSendConfirmed) {
+                        messageSendFinishRejects++
+                        if (messageSendFinishRejects >= 3) {
+                            finalReply = "⚠️ 消息发送没有被系统确认：必须先完整输入消息，再成功点击发送控件且页面变化。已停止，请查看手机里的聊天页面。"
+                            android.util.Log.i("AIButler", "AGLM message send rejected x3, stop")
+                            break
+                        }
+                        android.util.Log.i("AIButler", "AGLM blocked finish: message send not mechanically confirmed #$messageSendFinishRejects")
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "🛑 系统校验：当前没有“已输入「${messageSendGoal.body}」→已点击发送→页面变化”的机械证据。" +
+                                    "如果输入框已有完整消息，请点击屏幕上的发送控件；如果还没输入，先聚焦输入框并完整输入。" +
+                                    "没有发送证据时 finish 会被拒绝。"
+                            )
+                        })
+                        continue
+                    }
                     // 机械判据优先裁决：打开App类任务，前台是目标=完成；不是=拒绝并告诉模型差什么
                     val fgCheck = completion.successCheck as? TaskCompletionVerifier.SuccessCheck.ForegroundApp
                     if (fgCheck != null) {
@@ -2833,6 +3041,7 @@ class MainActivity : AppCompatActivity() {
                         continue
                     }
                     if (finishGoalCheck.status == TaskGoalVerifier.Status.CONFIRMED) {
+                        verifiedByCheck = true
                         finalReply = "✅ 已完成：${finishGoalCheck.detail}"
                         break
                     }
@@ -2841,15 +3050,23 @@ class MainActivity : AppCompatActivity() {
                     if (finishVerifyCount < 1) {
                         finishVerifyCount++
                         android.util.Log.i("AIButler", "AGLM finish 验证关：要求出示完成证据")
+                        val finishPrompt = if (PageGuard.isProductResearchTask(userText)) {
+                            "🛑 系统提示：finish 前必须验证。请重新观察最新截图，对照用户任务「$userText」：" +
+                                "在 finish 的 message 里说明搜索词、结果/详情页的关键证据，以及为什么它满足比较条件（如销量最高）；" +
+                                "到达搜索框、普通首页或没有任何结果的页面都不是证据。" +
+                                "证据足够→重新输出 finish(message=...)；不够→不要 finish，立即输出继续任务的下一个动作。"
+                        } else {
+                            "🛑 系统提示：finish 前必须验证。请重新观察最新截图，对照用户任务「$userText」：" +
+                                "页面上有没有任务完成的直接证据（金币/余额确实比操作前增加、任务列表项变为已完成、明确的领取成功提示）？" +
+                                "如果用户给出了精确数字/时间/日期，最新页面必须显示完全一致的目标值或明确的保存/设置成功证据；" +
+                                "到达某个页面、出现弹窗、看到活动信息或原有余额数字都不算证据。有证据→重新输出 finish(message=...) 并在 message 里引用该证据；" +
+                                "没有→不要 finish，立即输出继续完成任务的下一个动作。"
+                        }
                         ctx.add(JsonObject().apply {
                             addProperty("role", "user")
                             addProperty(
                                 "content",
-                                "🛑 系统提示：finish 前必须验证。请重新观察最新截图，对照用户任务「$userText」：" +
-                                    "页面上有没有任务完成的直接证据（金币/余额确实比操作前增加、任务列表项变为已完成、明确的领取成功提示）？" +
-                                    "如果用户给出了精确数字/时间/日期，最新页面必须显示完全一致的目标值或明确的保存/设置成功证据；" +
-                                    "到达某个页面、出现弹窗、看到活动信息或原有余额数字都不算证据。有证据→重新输出 finish(message=...) 并在 message 里引用该证据；" +
-                                    "没有→不要 finish，立即输出继续完成任务的下一个动作。"
+                                finishPrompt
                             )
                         })
                         continue
@@ -3052,6 +3269,30 @@ class MainActivity : AppCompatActivity() {
                         continue
                     }
                 }
+                // 坐标级机械拦截：实测跳出目标App的位置，本任务内绝不允许再点
+                if (recParsed?.first == "tap") {
+                    val tapBucket = JumpTrapGuard.bucketFromAnswer(answer)
+                    if (JumpTrapGuard.isBlocked(tapBucket, blockedTapBuckets)) {
+                        jumpBlockStreak++
+                        val bx = recParsed.third
+                        val by = recParsed.fourth
+                        runOnUiThread {
+                            adapter.add(ChatAdapter.Msg("system", "🛑 已拦截重复点击实测外跳位置($bx,$by)"))
+                            rv.scrollToPosition(adapter.items.size - 1)
+                        }
+                        ctx.add(JsonObject().apply {
+                            addProperty("role", "user")
+                            addProperty(
+                                "content",
+                                "🛑 系统提示：这个位置你之前点过一次，点击后页面被拉出了目标应用，系统已机械拦截。" +
+                                    "绝不能再点这个位置（哪怕按钮文案变了）；请换与「$userText」直接相关的其他入口，" +
+                                    "找不到就 Back 离开当前页面或 Swipe 换路。" +
+                                    (if (jumpBlockStreak >= 2) "已连续${jumpBlockStreak}次撞拦截，先输出 Back 离开当前页面。" else "")
+                            )
+                        })
+                        continue
+                    }
+                }
                 val res = AgentEngine.execAutoGLM(
                     this, answer, realW, realH, userText, screenDump, guessedApp,
                     rewardCountdownSeconds = rewardCountdownSeconds
@@ -3072,6 +3313,12 @@ class MainActivity : AppCompatActivity() {
                 // ===== 评测落盘：本轮「回答→执行→页面变化」写一条 JSONL =====
                 val postExecFp = AssistantAccessibilityService.instance?.currentPageFingerprint()?.first
                 val pageChanged = postExecFp != null && postExecFp != preActionFp?.first
+                if (messageSendGoal != null && pendingMessageBody == messageSendGoal.body &&
+                    pageChanged && AgentEngine.isMessageSendTapIntent(screenDump, answer, raw)
+                ) {
+                    messageSendConfirmed = true
+                    android.util.Log.i("AIButler", "AGLM message send mechanically confirmed")
+                }
                 if (Prefs.evalLog(this)) {
                     EvalLogger.log(this, JsonObject().apply {
                         addProperty("type", "round")
@@ -3298,7 +3545,11 @@ class MainActivity : AppCompatActivity() {
                 // 重复声明直接编译冲突——体检第六轮 P0；tap空/swipe非null 的情形由这里计数）
                 if (tapM == null && swipeM != null) {
                     val swipeSig = "s_${swipeM.groupValues[1].toInt() / 15}_${swipeM.groupValues[2].toInt() / 15}"
-                    if (swipeSig == lastSwipeSig) sameTapCount++ else { sameTapCount = 1 }
+                    if (ActionProgress.repeatedSwipeIdle(lastSwipeSig, swipeSig, pageChanged)) {
+                        sameTapCount++
+                    } else {
+                        sameTapCount = 1
+                    }
                     lastSwipeSig = swipeSig
                 }
                 if (sameTapCount >= 6) {
@@ -3415,11 +3666,7 @@ class MainActivity : AppCompatActivity() {
                 val targetNeverReached = guessedApp != null &&
                     (targetAppPackage == null || targetAppPackage !in visitedPackages)
                 // 机械校验优先；没有机械证据时由经验总结模型基于轨迹判定，用户不再补勾叉。
-                val effectiveForceSuccess = when {
-                    targetNeverReached -> false
-                    verifiedByCheck -> true
-                    else -> null
-                }
+                val effectiveForceSuccess = ExperienceVerdict.resolve(targetNeverReached, verifiedByCheck)
                 // 先把结果立刻显示给用户；经验总结要再跑一次大模型调用，放到后台，完成后再补充显示
                 runOnUiThread {
                     // 截图状态行先改口（已完成/已停止），最终回复紧随其后
@@ -3834,10 +4081,12 @@ class MainActivity : AppCompatActivity() {
             val prompt = """
                 请把下面一次手机自动操作总结为可复用经验。不要记录账号、密码、验证码、IMEI、余额等敏感值；只记录应用名、页面名、入口文字、路径、弹窗处理和失败原因。
                 先独立核对 SUCCESS：不要相信结果里的“已完成”或✅符号；页面/动作证据和声明冲突时 SUCCESS 填 false。
+                搜索/播放类任务不要因为标题没有复述查询词就判失败；只要进入了与查询语义匹配的详情页或播放页，并且动作里没有广告/下载/支付标记，就按成功总结。
                 如果只执行到支付、下单、验证码等安全确认前一步并明确交还用户，任务执行本身算成功。
                 严格输出以下字段：
                 TITLE: 不超过20字的经验标题
                 CONTENT: 不超过300字的路径和要点
+                REASON: 不超过80字的成败证据
                 KEYWORDS: 逗号分隔的检索关键词
                 PACKAGES: 逗号分隔的安卓包名；不确定就留空
                 SUCCESS: true 或 false
@@ -3861,9 +4110,16 @@ class MainActivity : AppCompatActivity() {
             fun field(name: String) = Regex("(?im)^\\s*$name\\s*:\\s*(.+)$").find(raw)?.groupValues?.get(1)?.trim().orEmpty()
             val title = field("TITLE").ifBlank { task.take(20) }
             val content = field("CONTENT").ifBlank { result.take(280) }
+            val reason = field("REASON")
             val keywords = field("KEYWORDS").split(',', '，', ';', '；').map { it.trim() }.filter { it.isNotBlank() }
             val packageNames = field("PACKAGES").split(',', '，', ';', '；').map { it.trim() }.filter { it.isNotBlank() }
-            val success = mechanicalSuccess ?: TaskOutcomeJudge.parse(raw) ?: false
+            val success = mechanicalSuccess ?: TaskOutcomeJudge.parse(raw)
+            if (success == null) {
+                return "⚠️ 结果证据不足，本次经验不记录。"
+            }
+            if (!success && reason.isBlank()) {
+                return "⚠️ 失败结论缺少证据，本次经验不记录。"
+            }
             AgentExperienceStore.upsert(
                 this, AgentExperience(title, content, keywords, packageNames, success)
             )
