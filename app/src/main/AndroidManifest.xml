@@ -50,14 +50,6 @@
             android:exported="false"
             android:label="设置 · AI大脑与权限" />
 
-        <activity
-            android:name=".ExperienceDialogActivity"
-            android:exported="false"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:taskAffinity=""
-            android:theme="@style/Theme.Assistant.TranslucentDialog" />
-
         <service
             android:name=".AssistantAccessibilityService"
             android:exported="false"

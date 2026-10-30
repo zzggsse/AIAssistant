@@ -14,25 +14,4 @@
         <item name="android:windowBackground">@color/colorBackground</item>
     </style>
 
-    <!-- 悬浮球行为记录弹窗的透明宿主页：全透明，只显示弹窗本身 -->
-    <style name="Theme.Assistant.TranslucentDialog" parent="Theme.Assistant">
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:backgroundDimEnabled">true</item>
-    </style>
-
-    <style name="Theme.Assistant.LightDialog" parent="Theme.Material3.Light.Dialog.Alert">
-        <item name="colorPrimary">@color/colorPrimary</item>
-        <item name="colorOnPrimary">@color/colorOnPrimary</item>
-        <item name="colorSurface">@color/colorSurface</item>
-        <item name="colorSurfaceContainer">@color/colorSurface</item>
-        <item name="colorSurfaceContainerHigh">@color/colorSurface</item>
-        <item name="colorSurfaceContainerLow">@color/colorSurface</item>
-        <item name="colorOnSurface">@color/colorTextPrimary</item>
-        <item name="android:colorBackground">@color/colorSurface</item>
-        <item name="android:textColorPrimary">@color/colorTextPrimary</item>
-        <item name="android:textColorSecondary">@color/colorTextSecondary</item>
-        <item name="android:textColorTertiary">@color/colorTextSecondary</item>
-    </style>
 </resources>

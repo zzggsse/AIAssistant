@@ -6,14 +6,12 @@
     <color name="colorPrimaryDark">#3040C8</color>
     <color name="colorPrimaryLight">#E8ECFF</color>
     <color name="colorOnPrimary">#FFFFFF</color>
-    <color name="colorAccent">#F59E0B</color>
     <color name="colorTextPrimary">#1A1D23</color>
     <color name="colorTextSecondary">#6B7080</color>
     <color name="colorTextHint">#9BA0AC</color>
     <color name="colorDivider">#E8E9ED</color>
     <color name="colorBubbleUser">#3D5AFE</color>
     <color name="colorBubbleAssistant">#FFFFFF</color>
-    <color name="colorBubbleAssistantBorder">#ECEEF2</color>
     <color name="colorBubbleSystem">#EDEFF2</color>
     <color name="colorSystemText">#7A8090</color>
     <color name="colorBubbleThink">#F7F8FA</color>
