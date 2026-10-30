@@ -15,10 +15,10 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:paddingStart="4dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="8dp"
-            android:paddingBottom="8dp"
+            android:paddingStart="6dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
             android:background="@color/colorSurface"
             android:elevation="3dp">
 
@@ -53,7 +53,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/app_name"
-                    android:textSize="18sp"
+                    android:textSize="19sp"
                     android:fontFamily="sans-serif-medium"
                     android:textColor="@color/colorTextPrimary" />
 
@@ -61,7 +61,7 @@
                     android:id="@+id/tvProvider"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="3dp"
                     android:maxWidth="210dp"
                     android:maxLines="1"
                     android:ellipsize="end"
@@ -95,6 +95,11 @@
 
         </LinearLayout>
 
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/colorDivider" />
+
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
@@ -122,34 +127,35 @@
                 android:gravity="center_horizontal">
 
                 <ImageView
-                    android:layout_width="58dp"
-                    android:layout_height="58dp"
+                    android:layout_width="64dp"
+                    android:layout_height="64dp"
                     android:src="@drawable/ic_assistant"
                     android:background="@drawable/bg_assistant_avatar"
-                    android:padding="12dp"
+                    android:padding="14dp"
                     android:importantForAccessibility="no" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
+                    android:layout_marginTop="20dp"
                     android:text="你好，我能帮你操作手机"
-                    android:textSize="22sp"
+                    android:textSize="26sp"
                     android:fontFamily="sans-serif-medium"
+                    android:letterSpacing="-0.01"
                     android:textColor="@color/colorTextPrimary" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="7dp"
+                    android:layout_marginTop="8dp"
                     android:text="用一句话说清要做的事"
-                    android:textSize="14sp"
+                    android:textSize="15sp"
                     android:textColor="@color/colorTextSecondary" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="28dp"
+                    android:layout_marginTop="32dp"
                     android:orientation="horizontal">
 
                     <TextView
@@ -161,8 +167,8 @@
                         android:background="@drawable/bg_suggestion"
                         android:paddingStart="12dp"
                         android:paddingEnd="12dp"
-                        android:paddingTop="13dp"
-                        android:paddingBottom="13dp"
+                        android:paddingTop="14dp"
+                        android:paddingBottom="14dp"
                         android:text="定一个早上八点的闹钟"
                         android:textSize="14sp"
                         android:textColor="@color/colorTextPrimary"
@@ -187,7 +193,7 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="8dp"
                     android:orientation="horizontal">
 
                     <TextView
@@ -199,8 +205,8 @@
                         android:background="@drawable/bg_suggestion"
                         android:paddingStart="12dp"
                         android:paddingEnd="12dp"
-                        android:paddingTop="13dp"
-                        android:paddingBottom="13dp"
+                        android:paddingTop="14dp"
+                        android:paddingBottom="14dp"
                         android:text="搜一下今天的新闻"
                         android:textSize="14sp"
                         android:textColor="@color/colorTextPrimary"

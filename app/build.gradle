@@ -11,8 +11,8 @@ android {
         applicationId "com.aibutler.app"
         minSdk 26
         targetSdk 33
-        versionCode 67
-        versionName "1.14.0"
+    versionCode 68
+    versionName "1.14.1"
     }
 
     buildTypes {
