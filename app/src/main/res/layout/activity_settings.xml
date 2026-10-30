@@ -73,7 +73,7 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="18dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -239,7 +239,7 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="18dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -336,7 +336,7 @@
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="18dp">
+            android:padding="20dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -376,7 +376,7 @@
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="18dp">
+            android:padding="20dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -418,7 +418,7 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="18dp">
+            android:padding="20dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -549,7 +549,7 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="18dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"

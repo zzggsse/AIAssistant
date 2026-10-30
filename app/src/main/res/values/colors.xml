@@ -23,6 +23,15 @@
     <color name="colorInputStroke">#E2E5EC</color>
     <color name="colorActionStroke">#DAE0FF</color>
     <color name="colorCardShadow">#121A1D23</color>
+    <color name="colorRippleNeutral">#141A1D23</color>
+    <color name="colorRipplePrimary">#333D5AFE</color>
+    <color name="colorRippleInputFocus">#243D5AFE</color>
+    <color name="colorRippleNeutralButton">#1F1A1D23</color>
+    <color name="colorRipplePrimaryButton">#33FFFFFF</color>
+    <color name="colorSuggestionBorder">#14A1A5B0</color>
+    <color name="colorEyeButtonBg">#F4F4F5</color>
+    <color name="colorEyeButtonStroke">#E4E4E7</color>
+    <color name="colorHistorySelected">#E7EBFF</color>
     <color name="colorSuccess">#22C55E</color>
     <color name="colorError">#EF4444</color>
 </resources>
