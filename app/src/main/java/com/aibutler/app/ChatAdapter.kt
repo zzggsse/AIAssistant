@@ -154,6 +154,7 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         if (changed) {
             scheduleSave()
             notifyDataSetChanged()
+            onItemsChanged?.invoke()
         }
         return changed
     }
