@@ -135,12 +135,6 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "已收起全部思考", Toast.LENGTH_SHORT).show()
             }
         }
-        findViewById<View>(R.id.btnCollapseTasks).setOnClickListener {
-            if (adapter.collapseAllTasks()) {
-                Toast.makeText(this, "已收起任务过程", Toast.LENGTH_SHORT).show()
-                rv.scrollToPosition(adapter.itemCount - 1)
-            }
-        }
         adapter.onZoomImage = { path, preview ->
             ImageZoomDialog.show(this, path, preview)
         }
@@ -572,8 +566,6 @@ class MainActivity : AppCompatActivity() {
             if (adapter.items.isEmpty()) View.VISIBLE else View.GONE
         findViewById<View>(R.id.btnCollapseThinking).visibility =
             if (adapter.items.any { it.role == "think" && !it.collapsed }) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.btnCollapseTasks).visibility =
-            if (adapter.hasExpandedTasks()) View.VISIBLE else View.GONE
     }
 
     // ---------- 大脑主循环 ----------

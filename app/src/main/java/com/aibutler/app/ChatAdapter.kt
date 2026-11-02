@@ -370,26 +370,6 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         return changed
     }
 
-    /** 一键收起所有已展开的任务段 */
-    fun collapseAllTasks(): Boolean {
-        var changed = false
-        for (g in buildTaskGroups(items)) {
-            if (!items[g.userIdx].taskCollapsed) {
-                items[g.userIdx].taskCollapsed = true
-                changed = true
-            }
-        }
-        if (changed) {
-            scheduleSave()
-            notifyDataSetChanged()
-            onItemsChanged?.invoke()
-        }
-        return changed
-    }
-
-    fun hasExpandedTasks(): Boolean =
-        buildTaskGroups(items).any { !items[it.userIdx].taskCollapsed }
-
     /** 任务收尾时调用：把刚结束的任务折成任务卡；单步任务没有多轮过程，不折 */
     fun settleLastTask(): Boolean {
         val group = buildTaskGroups(items).lastOrNull() ?: return false
