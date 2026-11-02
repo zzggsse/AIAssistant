@@ -524,15 +524,15 @@ class MainActivity : AppCompatActivity() {
         val m = android.os.Build.MANUFACTURER.lowercase()
         return when {
             m.contains("xiaomi") || m.contains("redmi") ->
-                "💡 小米手机：设置→应用管理→AI小助手→自启动 打开；省电策略设为「无限制」"
+                "小米手机：设置→应用管理→AI小助手→自启动 打开；省电策略设为「无限制」"
             m.contains("huawei") || m.contains("honor") ->
-                "💡 华为/荣耀：设置→电池→启动管理→AI小助手→关闭自动管理，允许后台活动"
+                "华为/荣耀：设置→电池→启动管理→AI小助手→关闭自动管理，允许后台活动"
             m.contains("oppo") || m.contains("realme") || m.contains("oneplus") ->
-                "💡 OPPO/一加：设置→电池→应用耗电管理→AI小助手→允许后台运行"
+                "OPPO/一加：设置→电池→应用耗电管理→AI小助手→允许后台运行"
             m.contains("vivo") || m.contains("iqoo") ->
-                "💡 vivo：设置→电池→后台耗电→AI小助手→允许后台高耗电"
+                "vivo：设置→电池→后台耗电→AI小助手→允许后台高耗电"
             m.contains("samsung") ->
-                "💡 三星：设置→电池→后台使用限制→确保AI小助手不在休眠列表中"
+                "三星：设置→电池→后台使用限制→确保AI小助手不在休眠列表中"
             else -> null
         }
     }

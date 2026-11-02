@@ -76,8 +76,10 @@ class SettingsActivity : AppCompatActivity() {
         btnFilterSuccessExperience = findViewById(R.id.btnFilterSuccessExperience)
         btnFilterFailureExperience = findViewById(R.id.btnFilterFailureExperience)
 
-        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            Vendors.list.map { it.name })
+        spinner.adapter = ArrayAdapter(this, R.layout.item_spinner_selected,
+            Vendors.list.map { it.name }).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
 
         // 载入已保存的配置
         val savedId = Prefs.vendorId(this).ifBlank { "zhipu" }
@@ -309,6 +311,10 @@ class SettingsActivity : AppCompatActivity() {
         val llDeveloperPanelLayout = llDeveloperPanel
         val btnViewLog = Button(this).apply {
             text = "查看错误日志"
+            setTextColor(ContextCompat.getColor(this@SettingsActivity, R.color.colorTextPrimary))
+            setBackgroundResource(R.drawable.bg_neutral_button)
+            setAllCaps(false)
+            stateListAnimator = null
             setOnClickListener {
                 val logFile = CrashLogger.logFile(this@SettingsActivity)
                 // 只读前 4KB：日志文件上限 8MB，整文件 readText() 会卡主线程（体检 P2-16）
@@ -343,7 +349,7 @@ class SettingsActivity : AppCompatActivity() {
         etModel.setOnClickListener { if (v.models.isNotEmpty()) etModel.showDropDown() }
         tvKeyHint.text = v.keyHint
         if (v.keyUrl.isNotBlank()) {
-            tvKeyHint.append("\n👉 ${v.keyUrl}（点我打开）")
+            tvKeyHint.append("\n${v.keyUrl}（点我打开）")
             tvKeyHint.setOnClickListener {
                 try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(v.keyUrl))) } catch (e: Exception) {}
             }

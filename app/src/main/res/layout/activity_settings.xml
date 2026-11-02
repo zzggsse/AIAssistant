@@ -88,7 +88,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="选择厂商、填入 API Key，像切换开关一样方便"
+                android:text="选择厂商并填入 API Key"
                 android:textSize="13sp"
                 android:textColor="@color/colorTextSecondary" />
 
@@ -97,7 +97,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:text="① 厂商"
-                android:textSize="13sp"
+                android:textSize="14sp"
+                android:fontFamily="sans-serif-medium"
                 android:textColor="@color/colorTextSecondary" />
 
             <Spinner
@@ -126,7 +127,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="② 接口地址"
-                android:textSize="13sp"
+                android:textSize="14sp"
+                android:fontFamily="sans-serif-medium"
                 android:textColor="@color/colorTextSecondary" />
 
             <EditText
@@ -147,7 +149,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="③ 模型名"
-                android:textSize="13sp"
+                android:textSize="14sp"
+                android:fontFamily="sans-serif-medium"
                 android:textColor="@color/colorTextSecondary" />
 
             <LinearLayout
@@ -189,7 +192,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:text="④ API Key"
-                android:textSize="13sp"
+                android:textSize="14sp"
+                android:fontFamily="sans-serif-medium"
                 android:textColor="@color/colorTextSecondary" />
 
             <FrameLayout
@@ -514,7 +518,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="@dimen/developer_list_height"
                     android:layout_marginTop="6dp"
-                    android:background="@drawable/bg_settings_card"
+                    android:background="@color/colorSoftField"
                     android:scrollbars="vertical"
                     android:fadeScrollbars="true">
 
@@ -529,7 +533,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="💡 这些记录可直接编辑/删除，帮 AI 复用成功经验、避开失败走法"
+                    android:text="这些记录可直接编辑/删除，帮 AI 复用成功经验、避开失败走法"
                     android:textSize="11sp"
                     android:textColor="@color/colorTextHint"
                     android:lineSpacingExtra="3dp" />
