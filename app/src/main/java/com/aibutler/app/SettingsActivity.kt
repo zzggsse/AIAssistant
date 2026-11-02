@@ -78,7 +78,7 @@ class SettingsActivity : AppCompatActivity() {
 
         spinner.adapter = ArrayAdapter(this, R.layout.item_spinner_selected,
             Vendors.list.map { it.name }).apply {
-            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            setDropDownViewResource(R.layout.item_spinner_dropdown)
         }
 
         // 载入已保存的配置
