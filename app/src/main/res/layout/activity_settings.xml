@@ -37,7 +37,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="设置"
-                android:textSize="22sp"
+                android:textSize="24sp"
                 android:fontFamily="sans-serif-medium"
                 android:textColor="@color/colorTextPrimary" />
 
@@ -73,14 +73,14 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="AI 大脑配置"
                 android:textStyle="bold"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:letterSpacing="-0.01"
                 android:textColor="@color/colorTextPrimary" />
 
@@ -244,14 +244,14 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="思考过程"
                 android:textStyle="bold"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:letterSpacing="-0.01"
                 android:textColor="@color/colorTextPrimary" />
 
@@ -259,7 +259,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="看清 AI 每一步在想什么，方便判断它为什么点错"
+                android:text="控制聊天中的推理过程展示"
                 android:textSize="13sp"
                 android:textColor="@color/colorTextSecondary" />
 
@@ -287,7 +287,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="在聊天里默认展开，手机重开 App 后仍可见，点气泡可收起"
+                        android:text="默认展开；重启 App 后仍可见"
                         android:textSize="13sp"
                         android:textColor="@color/colorTextSecondary" />
                 </LinearLayout>
@@ -322,7 +322,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="开启后先推理再动手，才能看到完整思考过程；关闭可提速但可能不再返回思考"
+                        android:text="开启后先推理再动手；关闭可提速"
                         android:textSize="13sp"
                         android:textColor="@color/colorTextSecondary" />
                 </LinearLayout>
@@ -342,7 +342,7 @@
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -353,17 +353,17 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="AutoGLM-Phone 手机脑（看截图操控）"
+                    android:text="AutoGLM-Phone 手机脑"
                     android:textStyle="bold"
-                    android:textSize="18sp"
-                android:letterSpacing="-0.01"
+                    android:textSize="16sp"
+                    android:letterSpacing="-0.01"
                     android:textColor="@color/colorTextPrimary" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="开启后由智谱 AutoGLM-Phone 看截图决策，适合抖音/小红书这类自绘界面；需把上方厂商选为「智谱 GLM」。关闭则用控件树大脑（省流量，文字类任务更稳）"
+                    android:text="看截图操作自绘界面；厂商需选为「智谱 GLM」"
                     android:textSize="13sp"
                     android:textColor="@color/colorTextSecondary" />
             </LinearLayout>
@@ -383,7 +383,7 @@
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -394,17 +394,17 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="开放式任务挂机上限"
+                    android:text="挂机任务上限"
                     android:textStyle="bold"
-                    android:textSize="18sp"
-                android:letterSpacing="-0.01"
+                    android:textSize="16sp"
+                    android:letterSpacing="-0.01"
                     android:textColor="@color/colorTextPrimary" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="2dp"
-                    android:text="「刷视频赚金币」这类不说停的任务，每挂机这么久问一次要不要继续；不点就默认继续"
+                    android:text="到时间询问是否继续；不点则继续"
                     android:textSize="13sp"
                     android:textColor="@color/colorTextSecondary" />
             </LinearLayout>
@@ -426,7 +426,7 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -445,8 +445,8 @@
                         android:layout_height="wrap_content"
                         android:text="开发者模式"
                         android:textStyle="bold"
-                        android:textSize="18sp"
-                android:letterSpacing="-0.01"
+                        android:textSize="16sp"
+                        android:letterSpacing="-0.01"
                         android:textColor="@color/colorTextPrimary" />
 
                     <TextView
@@ -558,14 +558,14 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="权限设置"
+                android:text="权限"
                 android:textStyle="bold"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:letterSpacing="-0.01"
                 android:textColor="@color/colorTextPrimary" />
 
@@ -573,7 +573,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="让 AI 能真正帮你干活"
+                android:text="自动操作需要系统授权"
                 android:textSize="13sp"
                 android:textColor="@color/colorTextSecondary" />
 
@@ -593,8 +593,8 @@
                 android:layout_marginTop="8dp"
                 android:text="开启「无障碍·自动执行」（必开）"
                 android:textSize="14sp"
-                android:textColor="@color/colorTextPrimary"
-                android:background="@drawable/bg_neutral_button"
+                android:textColor="@color/colorOnPrimary"
+                android:background="@drawable/bg_send_button"
                 app:backgroundTint="@null" />
 
             <Button
@@ -617,14 +617,14 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="安全"
                 android:textStyle="bold"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:letterSpacing="-0.01"
                 android:textColor="@color/colorTextPrimary" />
 
@@ -675,7 +675,8 @@
                 android:text="保存 PIN 码（只存本机）"
                 android:textSize="14sp"
                 android:textColor="@color/colorPrimary"
-                android:background="@drawable/bg_section_button" />
+                android:background="@drawable/bg_section_button"
+                app:backgroundTint="@null" />
 
             <TextView
                 android:layout_width="match_parent"
@@ -694,14 +695,14 @@
             android:layout_marginTop="14dp"
             android:orientation="vertical"
             android:background="@drawable/bg_settings_card"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="关于"
                 android:textStyle="bold"
-                android:textSize="18sp"
+                android:textSize="16sp"
                 android:letterSpacing="-0.01"
                 android:textColor="@color/colorTextPrimary" />
 

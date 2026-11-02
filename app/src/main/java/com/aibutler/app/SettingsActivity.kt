@@ -347,9 +347,11 @@ class SettingsActivity : AppCompatActivity() {
         }
         etModel.setAdapter(ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, v.models))
         etModel.setOnClickListener { if (v.models.isNotEmpty()) etModel.showDropDown() }
-        tvKeyHint.text = v.keyHint
+        tvKeyHint.text = buildString {
+            append(v.keyHint)
+            if (v.keyUrl.isNotBlank()) append("\n点击打开 API Keys 页面")
+        }
         if (v.keyUrl.isNotBlank()) {
-            tvKeyHint.append("\n${v.keyUrl}（点我打开）")
             tvKeyHint.setOnClickListener {
                 try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(v.keyUrl))) } catch (e: Exception) {}
             }

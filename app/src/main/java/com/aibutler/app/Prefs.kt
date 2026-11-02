@@ -26,7 +26,7 @@ object Vendors {
             "https://open.bigmodel.cn/api/paas/v4", "autoglm-phone",
             listOf("autoglm-phone", "glm-4.5-flash", "glm-4-flash", "glm-4-flash-250414", "glm-4.5", "glm-4.6", "glm-4-plus"),
             "https://open.bigmodel.cn/usercenter/apikeys",
-            "去 open.bigmodel.cn 注册 → API Keys；默认 AutoGLM-Phone 手机脑（限时免费），也可以改选免费的 glm-4.5-flash。编程包月套餐请选「智谱编程版」"
+            "注册后创建 API Key；默认 AutoGLM-Phone 手机脑（限时免费），也可改选免费的 glm-4.5-flash；编程包月选「智谱编程版」"
         ),
         Vendor(
             "zhipu_coding", "智谱 GLM 编程版（包月套餐用这个）",

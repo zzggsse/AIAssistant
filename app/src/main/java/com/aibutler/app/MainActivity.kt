@@ -388,6 +388,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun removeA11yStatusMessages() {
+        val statusTexts = buildSet {
+            add("⚠️ 无障碍服务未连接，发指令时会自动弹出授权页面")
+            add("✅ 无障碍服务已连接，可以自动操作手机了")
+            oemHint()?.let(::add)
+        }
+        val toRemove = adapter.items.filter { it.role == "system" && it.text in statusTexts }
+        if (toRemove.isNotEmpty()) {
+            adapter.items.removeAll(toRemove)
+            adapter.notifyDataSetChanged()
+            adapter.saveCurrent()
+        }
+    }
+
     private fun refreshHistory() {
         val conversations = ConversationStore.list(this)
         val currentId = ConversationStore.currentId(this)
@@ -508,11 +522,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateA11yBanner() {
         val ok = AssistantAccessibilityService.instance != null
         if (lastA11yOk == null || lastA11yOk != ok) {
+            removeA11yStatusMessages()
             if (!ok) {
                 adapter.add(ChatAdapter.Msg("system", "⚠️ 无障碍服务未连接，发指令时会自动弹出授权页面"))
                 oemHint()?.let { adapter.add(ChatAdapter.Msg("system", it)) }
             } else {
-                removePermissionWarnings()
                 adapter.add(ChatAdapter.Msg("system", "✅ 无障碍服务已连接，可以自动操作手机了"))
             }
         }
