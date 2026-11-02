@@ -73,7 +73,8 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         private const val SAVE_DELAY_MS = 220L
 
         /**
-         * 把平铺消息切成任务段：每条用户指令一段，段内每个 think/vision 开启新一轮，
+         * 把平铺消息切成任务段：每条用户指令一段，段内每个 think/vision 开启新一轮；
+         * 视觉任务常见顺序是截图在前、思考在后，紧随的思考仍归入同一个视觉轮次，
          * 最终回复/暂停/出错等终态消息归入段尾（收起任务时也保持可见）。
          * 纯函数，渲染与单元测试共用。
          */
@@ -114,6 +115,11 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
                         flushRound()
                         sealed = true
                         tail.add(i)
+                    } else if (m.role == "think" &&
+                        curStart >= 0 &&
+                        curMsgs.all { items[it].role == "vision" }
+                    ) {
+                        curMsgs.add(i)
                     } else if (m.role == "think" || m.role == "vision") {
                         flushRound()
                         curStart = i
@@ -170,7 +176,12 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
                         .substringBefore(" ").substringBefore("{").trim()
                 }?.takeIf { it.isNotBlank() }
             if (toolName != null) return toolName.take(14)
-            val line = items[startIdx].text.lineSequence().firstOrNull { it.isNotBlank() } ?: "执行动作"
+            val line = msgs.asSequence().map { items[it] }
+                .filter { it.role == "think" || it.role == "vision" }
+                .flatMap { it.text.lineSequence() }
+                .firstOrNull { it.isNotBlank() }
+                ?: items[startIdx].text.lineSequence().firstOrNull { it.isNotBlank() }
+                ?: "执行动作"
             return line.take(14) + if (line.length > 14) "…" else ""
         }
 

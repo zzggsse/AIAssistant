@@ -94,6 +94,26 @@ class ChatAdapterGroupingTest {
     }
 
     @Test
+    fun `vision followed by thinking stays in the same round`() {
+        val items = mutableListOf(
+            ChatAdapter.Msg("user", "看看当前屏幕"),
+            ChatAdapter.Msg("vision", "截图说明", imagePath = "/tmp/screen.jpg"),
+            ChatAdapter.Msg("think", "当前已经进入目标页面"),
+            ChatAdapter.Msg("system", "🔧 正在执行：screenshot {}"),
+            ChatAdapter.Msg("assistant", "✅ 已完成")
+        )
+
+        val groups = ChatAdapter.buildTaskGroups(items)
+
+        assertEquals(1, groups.size)
+        assertEquals(1, groups[0].rounds.size)
+        val round = groups[0].rounds[0]
+        assertEquals(1, round.roundNo)
+        assertEquals(listOf(1, 2, 3), round.msgs)
+        assertEquals("screenshot", round.title)
+    }
+
+    @Test
     fun `collapsed task keeps user message and final reply visible`() {
         val items = mutableListOf(
             ChatAdapter.Msg("user", "设8点闹钟"),
