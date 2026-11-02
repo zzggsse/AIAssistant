@@ -48,7 +48,9 @@ class ChatAdapter(private val context: android.content.Context) : RecyclerView.A
         /** 第一层折叠：该任务段整体收起（存放在任务的用户消息上） */
         var taskCollapsed: Boolean = false,
         /** 第二层折叠：该轮是否展开；旧数据缺字段时 Gson 会填 false=收起 */
-        var roundExpanded: Boolean = false
+        var roundExpanded: Boolean = false,
+        /** 消息进入聊天流的时间；旧数据为 0 时由 ConversationStore 用原会话时间兜底 */
+        val sentAt: Long = System.currentTimeMillis()
     )
 
     companion object {

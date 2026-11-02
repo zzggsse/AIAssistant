@@ -51,7 +51,7 @@ object ConversationStore {
         current.messages.clear()
         current.messages.addAll(messages.map { it.copy() })
         current.title = titleFor(messages)
-        current.updatedAt = System.currentTimeMillis()
+        current.updatedAt = lastMessageAt(messages, current.updatedAt)
         persist(context, state)
         current
     }
@@ -60,7 +60,6 @@ object ConversationStore {
         val state = snapshot(context)
         val current = state.conversations.firstOrNull { it.id == state.currentId }
         if (current != null && current.messages.isEmpty()) {
-            current.updatedAt = System.currentTimeMillis()
             persist(context, state)
             return current
         }
@@ -176,6 +175,9 @@ object ConversationStore {
         val clean = line.trim().replace(Regex("\\s+"), " ")
         return clean.take(24) + if (clean.length > 24) "…" else ""
     }
+
+    internal fun lastMessageAt(messages: List<ChatAdapter.Msg>, fallback: Long): Long =
+        messages.maxOfOrNull { it.sentAt }?.takeIf { it > 0 } ?: fallback
 
     private fun file(context: Context) = File(context.filesDir, "conversations.json")
 }
