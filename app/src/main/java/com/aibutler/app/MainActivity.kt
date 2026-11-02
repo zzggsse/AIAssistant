@@ -135,6 +135,15 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "已收起全部思考", Toast.LENGTH_SHORT).show()
             }
         }
+        findViewById<View>(R.id.btnCollapseTasks).setOnClickListener {
+            if (adapter.collapseAllTasks()) {
+                Toast.makeText(this, "已收起任务过程", Toast.LENGTH_SHORT).show()
+                rv.scrollToPosition(adapter.itemCount - 1)
+            }
+        }
+        adapter.onZoomImage = { path, preview ->
+            ImageZoomDialog.show(this, path, preview)
+        }
 
         etInput = findViewById(R.id.etInput)
         tvTts = findViewById(R.id.tvTts)
@@ -440,7 +449,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "任务进行中，暂不能删除对话", Toast.LENGTH_SHORT).show()
             return
         }
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, R.style.ThemeOverlay_Assistant_AlertDialog)
             .setTitle("删除对话")
             .setMessage("「${conversation.title}」删除后无法恢复。")
             .setNegativeButton("取消", null)
@@ -563,6 +572,8 @@ class MainActivity : AppCompatActivity() {
             if (adapter.items.isEmpty()) View.VISIBLE else View.GONE
         findViewById<View>(R.id.btnCollapseThinking).visibility =
             if (adapter.items.any { it.role == "think" && !it.collapsed }) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.btnCollapseTasks).visibility =
+            if (adapter.hasExpandedTasks()) View.VISIBLE else View.GONE
     }
 
     // ---------- 大脑主循环 ----------
@@ -4156,6 +4167,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<SubmitMorphButton>(R.id.btnSend).apply {
             setBusy(busyNow, success)
             contentDescription = if (busyNow) "停止" else "发送"
+        }
+        if (!busyNow) {
+            // 任务收尾：把刚结束的这次任务折成任务卡，最终结果/暂停原因仍留在聊天里
+            if (adapter.settleLastTask()) {
+                rv.scrollToPosition(adapter.itemCount - 1)
+            }
+            updateEmptyState()
         }
     }
 

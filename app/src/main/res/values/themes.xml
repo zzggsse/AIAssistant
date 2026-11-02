@@ -14,4 +14,21 @@
         <item name="android:windowBackground">@color/colorBackground</item>
     </style>
 
+    <style name="ThemeOverlay.Assistant.AlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="android:colorBackground">@color/colorSurface</item>
+        <item name="colorSurface">@color/colorSurface</item>
+        <item name="android:windowBackground">@color/colorSurface</item>
+        <item name="colorOnSurface">@color/colorTextPrimary</item>
+        <item name="android:textColorPrimary">@color/colorTextPrimary</item>
+        <item name="android:textColorSecondary">@color/colorTextSecondary</item>
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="materialAlertDialogBodyTextStyle">@style/TextAppearance.Assistant.AlertDialogBody</item>
+    </style>
+
+    <style name="TextAppearance.Assistant.AlertDialogBody" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textColor">@color/colorTextPrimary</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:lineSpacingMultiplier">1.25</item>
+    </style>
+
 </resources>

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="48dp"
+    android:paddingEnd="26dp"
+    android:paddingTop="2dp"
+    android:paddingBottom="5dp">
+
+    <LinearLayout
+        android:id="@+id/roundDetailCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/bg_bubble_think"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:id="@+id/tvRoundThinkLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="思考过程"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/colorTextSecondary" />
+
+        <TextView
+            android:id="@+id/tvRoundThink"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="13sp"
+            android:textColor="@color/colorThinkText"
+            android:lineSpacingExtra="3dp" />
+
+        <ImageView
+            android:id="@+id/ivRoundImage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:adjustViewBounds="true"
+            android:maxHeight="260dp"
+            android:scaleType="fitStart"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="点击放大查看截图" />
+
+        <TextView
+            android:id="@+id/tvRoundCaption"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="@color/colorSystemText" />
+
+        <TextView
+            android:id="@+id/tvRoundTools"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textSize="11sp"
+            android:textColor="@color/colorSystemText"
+            android:lineSpacingExtra="2dp" />
+    </LinearLayout>
+</FrameLayout>

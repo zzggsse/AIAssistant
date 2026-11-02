@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="30dp"
+    android:paddingEnd="30dp"
+    android:paddingTop="6dp"
+    android:paddingBottom="2dp">
+
+    <LinearLayout
+        android:id="@+id/taskHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/bg_bubble_system"
+        android:paddingStart="13dp"
+        android:paddingEnd="13dp"
+        android:paddingTop="9dp"
+        android:paddingBottom="9dp"
+        android:clickable="true"
+        android:focusable="true">
+
+        <TextView
+            android:id="@+id/tvTaskTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:textColor="@color/colorTextSecondary"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/tvTaskStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:textSize="11sp"
+            android:textColor="@color/colorSystemText" />
+
+        <ImageView
+            android:id="@+id/ivTaskArrow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:src="@drawable/ic_chevron_down"
+            android:tint="@color/colorPrimary"
+            android:importantForAccessibility="yes"
+            android:contentDescription="展开或收起任务过程" />
+    </LinearLayout>
+</FrameLayout>
